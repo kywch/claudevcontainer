@@ -1,0 +1,7 @@
+# Ignore everything
+*
+
+# Except devcontainer config
+!.devcontainer/
+!.devcontainer/**
+!.gitignore

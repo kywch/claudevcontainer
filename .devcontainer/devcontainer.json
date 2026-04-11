@@ -1,0 +1,67 @@
+{
+  "name": "Claude Code Sandbox",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "TZ": "${localEnv:TZ:America/Los_Angeles}",
+      "ZSH_IN_DOCKER_VERSION": "1.2.0"
+    }
+  },
+  "runArgs": [
+    "--init",
+    "--gpus=all"
+  ],
+  "forwardPorts": [3001, 9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010, 9011, 9012, 9013, 9014, 9015, 9016, 9017, 9018, 9019, 9020, 9021, 9022, 9023, 9024, 9025, 9026, 9027, 9028, 9029, 9030, 9031, 9032, 9033, 9034, 9035, 9036, 9037, 9038, 9039, 9040, 9041, 9042, 9043, 9044, 9045, 9046, 9047, 9048, 9049, 9050, 9051, 9052, 9053, 9054, 9055, 9056, 9057, 9058, 9059, 9060, 9061, 9062, 9063, 9064, 9065, 9066, 9067, 9068, 9069, 9070, 9071, 9072, 9073, 9074, 9075, 9076, 9077, 9078, 9079, 9080, 9081, 9082, 9083, 9084, 9085, 9086, 9087, 9088, 9089, 9090, 9091, 9092, 9093, 9094, 9095, 9096, 9097, 9098, 9099, 9100],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "remote.autoForwardPorts": false,
+        "remote.restoreForwardedPorts": false
+      }
+    }
+  },
+  "remoteUser": "agent",
+  // Do NOT let VS Code replace our ENTRYPOINT with its default sleep-loop
+  // wrapper; we need devcontainer-entrypoint to run for volume chown, config
+  // seeding, and first-boot auth import.
+  "overrideCommand": false,
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/.claude ${localEnv:HOME}/.codex ${localEnv:HOME}/.gemini",
+  "mounts": [
+    "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
+
+    // Persistent state volumes (per workspace via devcontainerId).
+    // Entrypoint seeds config into these from /opt/devcontainer-home on each boot.
+    "source=claude-home-${devcontainerId},target=/home/agent/.claude,type=volume",
+    "source=codex-home-${devcontainerId},target=/home/agent/.codex,type=volume",
+    "source=gemini-home-${devcontainerId},target=/home/agent/.gemini,type=volume",
+
+    // Read-only host binds: source for first-boot auth import (entrypoint copies
+    // credentials from here into the volumes above). Safe to be empty.
+    "source=${localEnv:HOME}/.claude,target=/mnt/host-claude,type=bind,readonly",
+    "source=${localEnv:HOME}/.codex,target=/mnt/host-codex,type=bind,readonly",
+    "source=${localEnv:HOME}/.gemini,target=/mnt/host-gemini,type=bind,readonly",
+
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+  ],
+  "containerEnv": {
+    "NODE_OPTIONS": "--max-old-space-size=4096",
+    "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
+    "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
+    "NVIDIA_VISIBLE_DEVICES": "all"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+"portsAttributes": {
+    "3001": { "label": "Vite Dev Server" },
+    "9000-9100": { "label": "App Services" }
+  }
+}
