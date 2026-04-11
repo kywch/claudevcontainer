@@ -11,6 +11,7 @@ set -e
 
 DEFAULTS_ROOT=/opt/devcontainer-home
 AGENT_HOME=/home/agent
+AGENT_STATE=/workspace/.agent-state
 TOOLS=(claude codex gemini)
 
 # 1. Fix volume ownership on first boot.
@@ -21,6 +22,37 @@ for tool in "${TOOLS[@]}"; do
 done
 # gh token volume (mounted at .config/gh) — not in TOOLS loop because of path shape.
 sudo chown -R agent:agent "$AGENT_HOME/.config/gh" 2>/dev/null || true
+
+# 1b. Relocate high-churn transcript/state subdirs onto the /workspace bind
+#     mount so they're host-visible for analysis and live on the host FS
+#     rather than the named Docker volume. Claude's auto-memory system (files
+#     under projects/<cwd-hash>/memory/) rides along automatically because
+#     memory is a child of projects/.
+#
+#     Only Claude + Gemini are relocated here. Codex is skipped because its
+#     binary guards against symlinked state roots ("refusing to clear
+#     symlinked memory root") and the only env-var knob (CODEX_HOME) is
+#     all-or-nothing, which would put auth.json on the host FS too. Revisit
+#     later if host-visible Codex sessions become worth the tradeoff.
+#
+#     Idempotent: on second boot vol_path is already a symlink, so the
+#     rsync/rm branch is skipped and ln -sfn is a no-op. Must run before
+#     any CLI session starts — doing it later would sever live fds.
+relocate_symlink() {
+  local vol_path="$1"
+  local ws_path="$2"
+  mkdir -p "$ws_path"
+  if [ -d "$vol_path" ] && [ ! -L "$vol_path" ]; then
+    rsync -a "$vol_path/" "$ws_path/" 2>/dev/null || true
+    rm -rf "$vol_path"
+  fi
+  ln -sfn "$ws_path" "$vol_path"
+}
+
+for sub in projects todos sessions shell-snapshots; do
+  relocate_symlink "$AGENT_HOME/.claude/$sub" "$AGENT_STATE/claude/$sub"
+done
+relocate_symlink "$AGENT_HOME/.gemini/tmp" "$AGENT_STATE/gemini/tmp"
 
 # 2. Seed config from image defaults.
 #    Top-level files: overwrite from defaults on every boot (so repo edits
