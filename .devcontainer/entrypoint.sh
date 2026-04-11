@@ -54,6 +54,38 @@ for sub in projects todos sessions shell-snapshots; do
 done
 relocate_symlink "$AGENT_HOME/.gemini/tmp" "$AGENT_STATE/gemini/tmp"
 
+# 1c. Archon state lives directly on the /workspace bind mount at
+#     /workspace/.archon (via ARCHON_HOME in devcontainer.json). This makes
+#     archon.db, config.yaml, update-check.json, and web-dist/ persist across
+#     rebuilds AND be host-visible in the same tree as committed workflows
+#     at /workspace/.archon/workflows/.
+#
+#     Unlike the Claude/Gemini relocations above, Archon has no named volume
+#     in the picture — state has always lived wherever ARCHON_HOME points, so
+#     no rsync migration is needed. Just two symlinks to cover gaps in
+#     Archon's configurability (verified against upstream source):
+#
+#       - workflows bridge: global workflow discovery is hardcoded to
+#         $ARCHON_HOME/.archon/workflows/ (workflow-discovery.ts:186-188
+#         + archon-paths.ts:129). Bridge it to the top-level workflows/
+#         dir so committed workflows are discovered from any cwd, not
+#         just when archon is invoked from /workspace itself.
+#
+#       - workspaces redirect: worktrees are hardcoded under
+#         $ARCHON_HOME/workspaces/ with no independent override
+#         (archon-paths.ts:251-253). Redirect to container overlay FS so
+#         worktree I/O churn stays off the host bind mount. Ephemeral
+#         across rebuilds, but Archon's orphan sweeper handles that.
+#
+#     Also clears any stale ~/.archon symlink from ad-hoc test-drives
+#     before ARCHON_HOME was adopted — harmless but confusing in `ls ~`.
+rm -f "$AGENT_HOME/.archon"
+ARCHON_ROOT=/workspace/.archon
+mkdir -p "$ARCHON_ROOT/workflows" "$ARCHON_ROOT/.archon" \
+         "$AGENT_HOME/.archon-worktrees"
+ln -sfn /workspace/.archon/workflows "$ARCHON_ROOT/.archon/workflows"
+ln -sfn "$AGENT_HOME/.archon-worktrees" "$ARCHON_ROOT/workspaces"
+
 # 2. Seed config from image defaults.
 #    Top-level files: overwrite from defaults on every boot (so repo edits
 #      propagate after rebuild).

@@ -5,3 +5,13 @@
 !.devcontainer/
 !.devcontainer/**
 !.gitignore
+
+# Archon: commit custom workflows only, ignore all runtime state.
+# Anchored with leading / so the rules only apply to /workspace/.archon/, not
+# to any sibling repo's .archon/ dir. Runtime state (archon.db, config.yaml,
+# update-check.json, web-dist/, the entrypoint-managed .archon/.archon/ bridge
+# symlink, and the workspaces redirect) all match /.archon/* and stay ignored.
+!/.archon/
+/.archon/*
+!/.archon/workflows/
+!/.archon/workflows/**

@@ -58,6 +58,13 @@
   "containerEnv": {
     "NODE_OPTIONS": "--max-old-space-size=4096",
     "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
+    // Archon keeps all its state (SQLite DB, config, worktrees, web-dist) under
+    // $ARCHON_HOME. Point it at /workspace/.archon so state persists on the
+    // host bind mount across rebuilds AND lives next to committed custom
+    // workflows at /workspace/.archon/workflows/. See entrypoint.sh step 1c
+    // for the two internal symlinks that cover gaps in Archon's configurability
+    // (global workflow discovery path + worktree location override).
+    "ARCHON_HOME": "/workspace/.archon",
     "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
     "NVIDIA_VISIBLE_DEVICES": "all"
   },
