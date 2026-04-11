@@ -60,6 +60,26 @@ RUN curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/r
     | tar -xz -C /usr/local/bin rtk && \
   chmod 0755 /usr/local/bin/rtk
 
+# Install Archon CLI (AI coding workflow orchestration engine).
+# State lives at /workspace/.archon/ via ARCHON_HOME (set in devcontainer.json),
+# so the SQLite DB, committed custom workflows, config, and web-dist cache
+# persist across rebuilds on the host bind mount. See entrypoint.sh step 1c
+# for the two internal symlinks that cover gaps in Archon's configurability
+# (global workflow discovery path + worktree location override).
+#
+# Pinned to a release and checksum-verified so rebuilds are reproducible.
+# Checksum file follows the format used by Archon's official installer
+# (scripts/install.sh) — one line per platform, `<sha256>  <binary-name>`.
+ARG ARCHON_VERSION=v0.3.5
+RUN curl -fsSL "https://github.com/coleam00/Archon/releases/download/${ARCHON_VERSION}/archon-linux-x64" \
+      -o /tmp/archon-linux-x64 && \
+    curl -fsSL "https://github.com/coleam00/Archon/releases/download/${ARCHON_VERSION}/checksums.txt" \
+      -o /tmp/archon-checksums.txt && \
+    ( cd /tmp && grep 'archon-linux-x64$' archon-checksums.txt | sha256sum -c - ) && \
+    install -m 0755 /tmp/archon-linux-x64 /usr/local/bin/archon && \
+    rm /tmp/archon-linux-x64 /tmp/archon-checksums.txt && \
+    /usr/local/bin/archon version | head -1
+
 USER $USERNAME
 
 ENV HOME=/home/agent
