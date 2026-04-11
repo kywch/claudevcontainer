@@ -43,6 +43,9 @@
     "source=claude-home-${devcontainerId},target=/home/agent/.claude,type=volume",
     "source=codex-home-${devcontainerId},target=/home/agent/.codex,type=volume",
     "source=gemini-home-${devcontainerId},target=/home/agent/.gemini,type=volume",
+    // gh token volume: no host bind, no entrypoint import. Run `gh auth login`
+    // once inside the container; the token persists across rebuilds in this volume.
+    "source=gh-config-${devcontainerId},target=/home/agent/.config/gh,type=volume",
 
     // Read-only host binds: source for first-boot auth import (entrypoint copies
     // credentials from here into the volumes above). Safe to be empty.
