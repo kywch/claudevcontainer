@@ -60,16 +60,11 @@ RUN curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/r
     | tar -xz -C /usr/local/bin rtk && \
   chmod 0755 /usr/local/bin/rtk
 
-# Install Archon CLI (AI coding workflow orchestration engine).
-# State lives at /workspace/.archon/ via ARCHON_HOME (set in devcontainer.json),
-# so the SQLite DB, committed custom workflows, config, and web-dist cache
-# persist across rebuilds on the host bind mount. See entrypoint.sh step 1c
-# for the two internal symlinks that cover gaps in Archon's configurability
-# (global workflow discovery path + worktree location override).
-#
-# Pinned to a release and checksum-verified so rebuilds are reproducible.
-# Checksum file follows the format used by Archon's official installer
-# (scripts/install.sh) — one line per platform, `<sha256>  <binary-name>`.
+# Install Archon CLI. State lives at $ARCHON_HOME=/workspace/.archon (set in
+# devcontainer.json); see entrypoint.sh step 1c. Pinned + checksum-verified.
+# Final `rm -rf /tmp/claude-agent-sdk-*` is load-bearing: `archon version`
+# extracts the bundled Claude Agent SDK cli.js as root at build time, which
+# causes EACCES for the agent user at runtime.
 ARG ARCHON_VERSION=v0.3.5
 RUN curl -fsSL "https://github.com/coleam00/Archon/releases/download/${ARCHON_VERSION}/archon-linux-x64" \
       -o /tmp/archon-linux-x64 && \
@@ -78,7 +73,8 @@ RUN curl -fsSL "https://github.com/coleam00/Archon/releases/download/${ARCHON_VE
     ( cd /tmp && grep 'archon-linux-x64$' archon-checksums.txt | sha256sum -c - ) && \
     install -m 0755 /tmp/archon-linux-x64 /usr/local/bin/archon && \
     rm /tmp/archon-linux-x64 /tmp/archon-checksums.txt && \
-    /usr/local/bin/archon version | head -1
+    /usr/local/bin/archon version | head -1 && \
+    rm -rf /tmp/claude-agent-sdk-*
 
 USER $USERNAME
 

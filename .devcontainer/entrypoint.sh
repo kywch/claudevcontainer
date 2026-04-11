@@ -2,8 +2,8 @@
 # devcontainer-entrypoint: first-boot volume chown, config seeding, and
 # first-boot auth import. Runs on every container start, idempotent.
 #
-# Layout assumptions:
-#   /opt/devcontainer-home/.<tool>/   Baked-in defaults (from COPY at build)
+# Layout:
+#   /opt/devcontainer-home/.<tool>/   Baked-in defaults (COPY at build)
 #   /home/agent/.<tool>/              Named Docker volume (runtime state)
 #   /mnt/host-<tool>/                 Read-only host bind (auth source)
 
@@ -14,30 +14,16 @@ AGENT_HOME=/home/agent
 AGENT_STATE=/workspace/.agent-state
 TOOLS=(claude codex gemini)
 
-# 1. Fix volume ownership on first boot.
-#    Docker creates empty named volumes as root:root; the agent user cannot
-#    write to them until we reclaim ownership. Harmless on subsequent boots.
+# 1. Fix volume ownership on first boot (Docker creates volumes as root:root).
 for tool in "${TOOLS[@]}"; do
   sudo chown -R agent:agent "$AGENT_HOME/.$tool" 2>/dev/null || true
 done
-# gh token volume (mounted at .config/gh) — not in TOOLS loop because of path shape.
 sudo chown -R agent:agent "$AGENT_HOME/.config/gh" 2>/dev/null || true
 
-# 1b. Relocate high-churn transcript/state subdirs onto the /workspace bind
-#     mount so they're host-visible for analysis and live on the host FS
-#     rather than the named Docker volume. Claude's auto-memory system (files
-#     under projects/<cwd-hash>/memory/) rides along automatically because
-#     memory is a child of projects/.
-#
-#     Only Claude + Gemini are relocated here. Codex is skipped because its
-#     binary guards against symlinked state roots ("refusing to clear
-#     symlinked memory root") and the only env-var knob (CODEX_HOME) is
-#     all-or-nothing, which would put auth.json on the host FS too. Revisit
-#     later if host-visible Codex sessions become worth the tradeoff.
-#
-#     Idempotent: on second boot vol_path is already a symlink, so the
-#     rsync/rm branch is skipped and ln -sfn is a no-op. Must run before
-#     any CLI session starts — doing it later would sever live fds.
+# 1b. Relocate Claude + Gemini transcript dirs to /workspace bind mount for
+#     host-visible analysis. Claude auto-memory (projects/<hash>/memory/) rides
+#     along as a child of projects/. Codex skipped: guards against symlinked
+#     state roots. Must run pre-session — live fds would be severed.
 relocate_symlink() {
   local vol_path="$1"
   local ws_path="$2"
@@ -49,36 +35,22 @@ relocate_symlink() {
   ln -sfn "$ws_path" "$vol_path"
 }
 
-for sub in projects todos sessions shell-snapshots; do
+for sub in projects todos shell-snapshots; do
   relocate_symlink "$AGENT_HOME/.claude/$sub" "$AGENT_STATE/claude/$sub"
 done
 relocate_symlink "$AGENT_HOME/.gemini/tmp" "$AGENT_STATE/gemini/tmp"
 
-# 1c. Archon state lives directly on the /workspace bind mount at
-#     /workspace/.archon (via ARCHON_HOME in devcontainer.json). This makes
-#     archon.db, config.yaml, update-check.json, and web-dist/ persist across
-#     rebuilds AND be host-visible in the same tree as committed workflows
-#     at /workspace/.archon/workflows/.
-#
-#     Unlike the Claude/Gemini relocations above, Archon has no named volume
-#     in the picture — state has always lived wherever ARCHON_HOME points, so
-#     no rsync migration is needed. Just two symlinks to cover gaps in
-#     Archon's configurability (verified against upstream source):
-#
-#       - workflows bridge: global workflow discovery is hardcoded to
-#         $ARCHON_HOME/.archon/workflows/ (workflow-discovery.ts:186-188
-#         + archon-paths.ts:129). Bridge it to the top-level workflows/
-#         dir so committed workflows are discovered from any cwd, not
-#         just when archon is invoked from /workspace itself.
-#
-#       - workspaces redirect: worktrees are hardcoded under
-#         $ARCHON_HOME/workspaces/ with no independent override
-#         (archon-paths.ts:251-253). Redirect to container overlay FS so
-#         worktree I/O churn stays off the host bind mount. Ephemeral
-#         across rebuilds, but Archon's orphan sweeper handles that.
-#
-#     Also clears any stale ~/.archon symlink from ad-hoc test-drives
-#     before ARCHON_HOME was adopted — harmless but confusing in `ls ~`.
+# Migration: sessions/ is per-PID liveness metadata (not transcripts) — was
+# pointless to relocate. Clean up stale symlink + orphan workspace dir.
+if [ -L "$AGENT_HOME/.claude/sessions" ]; then
+  rm "$AGENT_HOME/.claude/sessions"
+fi
+rm -rf "$AGENT_STATE/claude/sessions"
+
+# 1c. Archon: ARCHON_HOME=/workspace/.archon (set in devcontainer.json) makes
+#     state persist on the bind mount. Two symlinks cover hardcoded paths:
+#       - workflows bridge for global discovery (workflow-discovery.ts:186)
+#       - workspaces off host FS for worktree I/O (archon-paths.ts:251)
 rm -f "$AGENT_HOME/.archon"
 ARCHON_ROOT=/workspace/.archon
 mkdir -p "$ARCHON_ROOT/workflows" "$ARCHON_ROOT/.archon" \
@@ -87,12 +59,9 @@ ln -sfn /workspace/.archon/workflows "$ARCHON_ROOT/.archon/workflows"
 ln -sfn "$AGENT_HOME/.archon-worktrees" "$ARCHON_ROOT/workspaces"
 
 # 2. Seed config from image defaults.
-#    Top-level files: overwrite from defaults on every boot (so repo edits
-#      propagate after rebuild).
-#    Managed subdirs (commands/, agents/, skills/, hooks/): mirror with
-#      --delete so files removed from the repo disappear from the volume too.
-#    Everything else in the volume (projects/, sessions/, todos/, plugins/,
-#      shell-snapshots/, .credentials.json, etc.) is untouched.
+#    Top-level files: overwrite every boot so repo edits propagate.
+#    Managed subdirs: mirror with --delete (stale entries removed).
+#    Other volume content (projects/, .credentials.json, etc.) is untouched.
 MANAGED_SUBDIRS=(commands agents skills hooks)
 
 for tool in "${TOOLS[@]}"; do
@@ -100,13 +69,11 @@ for tool in "${TOOLS[@]}"; do
   dst="$AGENT_HOME/.$tool"
   [ -d "$src" ] || continue
 
-  # Top-level config files (e.g. settings.json, CLAUDE.md)
   find "$src" -maxdepth 1 -type f -print0 2>/dev/null | \
     while IFS= read -r -d '' f; do
       cp -f "$f" "$dst/$(basename "$f")"
     done
 
-  # Managed subdirs: content mirror (delete stale entries)
   for subdir in "${MANAGED_SUBDIRS[@]}"; do
     [ -d "$src/$subdir" ] || continue
     mkdir -p "$dst/$subdir"
@@ -115,9 +82,7 @@ for tool in "${TOOLS[@]}"; do
   done
 done
 
-# 3. First-boot auth import: copy host credential files into the volume
-#    iff the target does not already exist. After first boot the volume owns
-#    the credentials and the in-container CLI can refresh them freely.
+# 3. First-boot auth import from host binds (no-op if target already exists).
 import_auth() {
   local src="$1" dst="$2"
   if [ -f "$src" ] && [ ! -f "$dst" ]; then
@@ -130,27 +95,20 @@ import_auth /mnt/host-claude/.credentials.json "$AGENT_HOME/.claude/.credentials
 import_auth /mnt/host-codex/auth.json           "$AGENT_HOME/.codex/auth.json"
 import_auth /mnt/host-gemini/oauth_creds.json   "$AGENT_HOME/.gemini/oauth_creds.json"
 
-# 4. Align docker group with the host's /var/run/docker.sock GID.
-#    The Dockerfile creates an empty `docker` group (no fixed GID) and adds
-#    agent to it; the host's socket GID varies per host (often 999, 998, 979,
-#    or 0 on macOS/OrbStack), so we realign at runtime. Idempotent: becomes a
-#    no-op once matched.
-#
-#    Subsequent `docker exec`s (e.g. VS Code shells) re-read /etc/group and
-#    pick up the new GID, so interactive sessions can hit docker.sock even
-#    though our already-running entrypoint process can't.
+# 4. Align docker group GID with host's /var/run/docker.sock (varies per host).
+#    New docker execs re-read /etc/group, so interactive shells pick up the
+#    realigned GID even though the entrypoint process itself can't.
 if [ -S /var/run/docker.sock ]; then
   sock_gid=$(stat -c '%g' /var/run/docker.sock)
   current_gid=$(getent group docker | cut -d: -f3 || true)
   if [ "$current_gid" != "$sock_gid" ]; then
     if ! sudo groupmod -g "$sock_gid" docker 2>/dev/null; then
-      # GID already owned by another group (e.g. staff on GID 50) — add agent
-      # to that group instead of fighting the collision.
+      # GID collision (e.g. staff on 50) — add agent to the owning group instead.
       sock_group=$(getent group "$sock_gid" | cut -d: -f1 || true)
       [ -n "$sock_group" ] && sudo usermod -aG "$sock_group" agent
     fi
   fi
 fi
 
-# 5. Hand off to whatever CMD the container was launched with.
+# 5. Hand off to CMD.
 exec "$@"
