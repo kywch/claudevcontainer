@@ -5,6 +5,13 @@
 !.devcontainer/
 !.devcontainer/**
 !.gitignore
+!README.md
+!CLAUDE.md
+
+# VPS deployment
+!docker-compose.vps.yml
+!.env.vps.example
+.env.vps
 
 # Archon: commit custom workflows only, ignore all runtime state.
 # Anchored with leading / so the rules only apply to /workspace/.archon/, not

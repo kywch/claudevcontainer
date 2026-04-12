@@ -32,10 +32,9 @@ and executes. Adding a new file here makes a new workflow available.
 
 ## What's here
 
-Initially seeded from the 13 workflows bundled in **Archon v0.3.5**, copied
-verbatim from `/workspace/Archon/.archon/workflows/defaults/*.yaml` at the
-`v0.3.5` tag. They're the same content the binary would use on its own —
-committing them here just makes them visible and editable.
+Initially seeded from the 13 workflows bundled in **Archon v0.3.5**. They're
+the same content the binary would use on its own — committing them here just
+makes them visible and editable.
 
 | File | Purpose (one-liner) |
 |---|---|
@@ -96,14 +95,16 @@ running the bundled versions too.
 
 When a new `archon` binary release comes out:
 
-1. Update the binary: `curl -fsSL https://archon.diy/install | bash`
-   (or rebuild the devcontainer if the new version is baked into the
-   Dockerfile).
-2. Check out the matching tag in the reference clone:
-   `cd /workspace/Archon && git fetch --tags && git checkout vX.Y.Z`
-3. Diff your committed copies against the new upstream versions:
-   `diff -u /workspace/Archon/.archon/workflows/defaults/archon-fix-github-issue.yaml /workspace/.archon/workflows/archon-fix-github-issue.yaml`
-4. Selectively cherry-pick any upstream improvements you like, or leave your
+1. Update the binary: bump `ARCHON_VERSION` in `.devcontainer/Dockerfile`
+   and rebuild, or run `curl -fsSL https://archon.diy/install | bash`.
+2. Diff your committed copies against the new upstream defaults:
+   ```bash
+   git clone --depth 1 --branch vX.Y.Z https://github.com/coleam00/Archon /tmp/archon-ref
+   diff -u /tmp/archon-ref/.archon/workflows/defaults/archon-fix-github-issue.yaml \
+           /workspace/.archon/workflows/archon-fix-github-issue.yaml
+   rm -rf /tmp/archon-ref
+   ```
+3. Selectively cherry-pick any upstream improvements you like, or leave your
    copies as-is if you're happy with them. Commit the sync if you make any
    changes.
 
@@ -123,6 +124,6 @@ Worktrees live at `/home/agent/.archon-worktrees/` (container overlay FS,
 ephemeral across rebuilds but swept automatically by Archon's orphan recovery
 on startup).
 
-The upstream Archon repo itself is at `/workspace/Archon/` (shallow clone,
-gitignored by the outer repo). Use it as a reference to read the full source,
-docs, and compare against upstream on upgrade.
+The upstream Archon repo is at https://github.com/coleam00/Archon. Clone it
+temporarily to `/tmp/archon-ref` when you need to compare against upstream
+on upgrade (see "How to upgrade Archon" above).

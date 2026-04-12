@@ -1,0 +1,89 @@
+# =============================================================================
+# VPS Deployment — Archon Telegram bot + devcontainer workstation
+# =============================================================================
+#
+# Usage:
+#   docker compose -f docker-compose.vps.yml up -d              # Both services
+#   docker compose -f docker-compose.vps.yml up -d archon       # Bot only
+#   docker compose -f docker-compose.vps.yml up -d workstation  # Workstation only
+#
+# Attach to workstation:
+#   docker exec -it workstation zsh
+#   (or VS Code Remote-SSH → host, then Dev Containers: Attach to Running Container)
+#
+# Restart after workflow edits (git pull on VPS, then):
+#   docker compose -f docker-compose.vps.yml restart archon
+#
+# Logs:
+#   docker compose -f docker-compose.vps.yml logs -f archon
+#
+
+services:
+  # ---------------------------------------------------------------------------
+  # Archon server — Telegram bot (+ optional Slack/Discord if tokens are set)
+  #
+  # Uses the published multi-arch image from ghcr.io. Chat adapters activate
+  # automatically when their *_BOT_TOKEN env vars are present.
+  #
+  # State lives in a named volume at /.archon (ARCHON_HOME is ignored when
+  # ARCHON_DOCKER=true — the image hardcodes /.archon).
+  # ---------------------------------------------------------------------------
+  archon:
+    image: ghcr.io/coleam00/archon:${ARCHON_VERSION:-0.3.5}
+    container_name: archon
+    env_file: .env.vps
+    environment:
+      ARCHON_DOCKER: "true"
+      PORT: "3000"
+    volumes:
+      - archon_state:/.archon
+      - ./:/workspace
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+
+  # ---------------------------------------------------------------------------
+  # Devcontainer workstation — same image as local dev, for SSH-in interactive
+  # use with Claude/Codex/Gemini CLIs + archon CLI.
+  #
+  # Attach via: docker exec -it workstation zsh
+  # Or VS Code Remote-SSH → host, then "Attach to Running Container".
+  # ---------------------------------------------------------------------------
+  workstation:
+    build:
+      context: .devcontainer
+      args:
+        TZ: ${TZ:-UTC}
+    image: workstation:local
+    container_name: workstation
+    command: ["sleep", "infinity"]
+    init: true
+    volumes:
+      - ./:/workspace
+      - claude-home:/home/agent/.claude
+      - codex-home:/home/agent/.codex
+      - gemini-home:/home/agent/.gemini
+      - gh-config:/home/agent/.config/gh
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      ARCHON_HOME: /workspace/.archon
+      NODE_OPTIONS: --max-old-space-size=4096
+      CLAUDE_CONFIG_DIR: /home/agent/.claude
+      POWERLEVEL9K_DISABLE_GITSTATUS: "true"
+    restart: unless-stopped
+
+volumes:
+  archon_state:
+  claude-home:
+  codex-home:
+  gemini-home:
+  gh-config:
