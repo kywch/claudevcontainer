@@ -82,10 +82,20 @@ for tool in "${TOOLS[@]}"; do
   done
 done
 
-# 3. First-boot auth import from host binds (no-op if target already exists).
+# 3. Auth import from host binds.
+#    Import on first boot, then refresh when the host credential is newer. This
+#    keeps browser-based OAuth on the host, where localhost callbacks work, while
+#    letting the container recover from expired copied credentials after restart.
 import_auth() {
   local src="$1" dst="$2"
-  if [ -f "$src" ] && [ ! -f "$dst" ]; then
+  if [ ! -f "$src" ]; then
+    return
+  fi
+
+  if [ ! -f "$dst" ] || [ "$src" -nt "$dst" ]; then
+    if [ -f "$dst" ]; then
+      cp -f "$dst" "$dst.backup.$(date +%s)" 2>/dev/null || true
+    fi
     cp -f "$src" "$dst"
     chmod 600 "$dst"
   fi

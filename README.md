@@ -20,7 +20,13 @@ Prerequisites: [Docker](https://docs.docker.com/get-docker/) + [VS Code](https:/
    gemini        # OAuth flow
    gh auth login
    ```
-   If you're already authenticated on the host, credentials are imported automatically on first boot. Credentials persist in named Docker volumes across rebuilds. For third-party API providers (e.g. [Z.AI](https://docs.z.ai/devpack/tool/claude)), configure `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` in Claude's settings.
+   If you're already authenticated on the host, credentials are imported automatically. Host credentials are also refreshed into the container on restart when the host copy is newer, so renew browser-based auth on the host rather than inside Docker. Credentials persist in named Docker volumes across rebuilds. For third-party API providers (e.g. [Z.AI](https://docs.z.ai/devpack/tool/claude)), configure `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` in Claude's settings.
+
+   To recover from expired Claude auth in the container:
+   ```bash
+   claude auth login          # on the host
+   # then restart/rebuild the devcontainer so the entrypoint refreshes ~/.claude
+   ```
 
 ### What's in the image
 
