@@ -9,7 +9,7 @@ ENV TZ="$TZ"
 # prints a `setlocale: cannot change locale` warning. Generating en_US.UTF-8
 # silences it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    fzf git gh jq less locales man-db nano procps rsync sudo unzip vim zsh && \
+    bubblewrap fzf git gh jq less locales man-db nano procps rclone rsync sudo unzip vim zsh && \
   echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && locale-gen && \
   apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -24,10 +24,10 @@ RUN usermod -l $USERNAME -d /home/$USERNAME -m node && \
 #   - /workspace + per-tool home dirs (named volumes overlay these at runtime)
 #   - passwordless sudo for agent (entrypoint uses it for first-boot chown)
 RUN mkdir -p /usr/local/share/npm-global /commandhistory /workspace \
-             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini && \
+             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini /home/$USERNAME/.forge && \
   touch /commandhistory/.bash_history && \
   chown -R $USERNAME:$USERNAME /usr/local/share/npm-global /commandhistory /workspace \
-             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini && \
+             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini /home/$USERNAME/.forge && \
   echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME-all && \
   chmod 0440 /etc/sudoers.d/$USERNAME-all
 
@@ -75,6 +75,19 @@ RUN curl -fsSL "https://github.com/coleam00/Archon/releases/download/${ARCHON_VE
     rm /tmp/archon-linux-x64 /tmp/archon-checksums.txt && \
     /usr/local/bin/archon version | head -1 && \
     rm -rf /tmp/claude-agent-sdk-*
+
+# Install Forge (forgecode.dev) CLI. Bypasses the upstream curl|sh installer so
+# we can (a) install to /usr/local/bin instead of mutating the agent's
+# ~/.local/bin and ~/.zshrc (which zsh-in-docker manages), and (b) skip its
+# fzf/bat/fd side-installs (fzf is already in apt above). Floats to latest
+# like the other coding CLIs above — rebuild to update.
+# Using the musl (statically-linked) variant: the GNU build requires
+# glibc >= 2.38, but node:20 (Debian Bookworm) ships glibc 2.36.
+RUN curl -fsSL "https://github.com/tailcallhq/forgecode/releases/latest/download/forge-x86_64-unknown-linux-musl" \
+      -o /tmp/forge && \
+    install -m 0755 /tmp/forge /usr/local/bin/forge && \
+    rm /tmp/forge && \
+    /usr/local/bin/forge --version
 
 USER $USERNAME
 

@@ -12,7 +12,7 @@ set -e
 DEFAULTS_ROOT=/opt/devcontainer-home
 AGENT_HOME=/home/agent
 AGENT_STATE=/workspace/.agent-state
-TOOLS=(claude codex gemini)
+TOOLS=(claude codex gemini forge)
 
 # 1. Fix volume ownership on first boot (Docker creates volumes as root:root).
 for tool in "${TOOLS[@]}"; do
@@ -82,6 +82,16 @@ for tool in "${TOOLS[@]}"; do
   done
 done
 
+# 2b. Install Claude Code plugins (idempotent — skips if already installed).
+#     Registration lives in ~/.claude.json inside the volume, so this must run
+#     at boot (not build time). Needs network on first install.
+if command -v claude >/dev/null 2>&1; then
+  if ! claude plugin list 2>/dev/null | grep -q "codex@openai-codex"; then
+    claude plugin marketplace add openai/codex-plugin-cc 2>&1 || true
+    claude plugin install codex@openai-codex --scope user 2>&1 || true
+  fi
+fi
+
 # 3. Auth import from host binds.
 #    Import on first boot, then refresh when the host credential is newer. This
 #    keeps browser-based OAuth on the host, where localhost callbacks work, while
@@ -104,6 +114,8 @@ import_auth() {
 import_auth /mnt/host-claude/.credentials.json "$AGENT_HOME/.claude/.credentials.json"
 import_auth /mnt/host-codex/auth.json           "$AGENT_HOME/.codex/auth.json"
 import_auth /mnt/host-gemini/oauth_creds.json   "$AGENT_HOME/.gemini/oauth_creds.json"
+import_auth /mnt/host-forge/.credentials.json     "$AGENT_HOME/.forge/.credentials.json"
+import_auth /mnt/host-forge/.mcp-credentials.json "$AGENT_HOME/.forge/.mcp-credentials.json"
 
 # 4. Align docker group GID with host's /var/run/docker.sock (varies per host).
 #    New docker execs re-read /etc/group, so interactive shells pick up the

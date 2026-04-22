@@ -19,12 +19,15 @@
         "anthropic.claude-code",
         "dbaeumer.vscode-eslint",
         "esbenp.prettier-vscode",
-        "eamodio.gitlens"
+        "eamodio.gitlens",
+        "openai.chatgpt"
       ],
       "settings": {
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "esbenp.prettier-vscode",
         "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.enablePersistentSessions": true,
+        "terminal.integrated.persistentSessionReviveProcess": "onExitAndWindowClose",
         "remote.autoForwardPorts": false,
         "remote.restoreForwardedPorts": false
       }
@@ -35,7 +38,7 @@
   // wrapper; we need devcontainer-entrypoint to run for volume chown, config
   // seeding, and first-boot auth import.
   "overrideCommand": false,
-  "initializeCommand": "mkdir -p ${localEnv:HOME}/.claude ${localEnv:HOME}/.codex ${localEnv:HOME}/.gemini",
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/.claude ${localEnv:HOME}/.codex ${localEnv:HOME}/.gemini ${localEnv:HOME}/.forge",
   "mounts": [
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
 
@@ -44,6 +47,7 @@
     "source=claude-home-${devcontainerId},target=/home/agent/.claude,type=volume",
     "source=codex-home-${devcontainerId},target=/home/agent/.codex,type=volume",
     "source=gemini-home-${devcontainerId},target=/home/agent/.gemini,type=volume",
+    "source=forge-home-${devcontainerId},target=/home/agent/.forge,type=volume",
     // gh token volume: no host bind, no entrypoint import. Run `gh auth login`
     // once inside the container; the token persists across rebuilds in this volume.
     "source=gh-config-${devcontainerId},target=/home/agent/.config/gh,type=volume",
@@ -53,6 +57,7 @@
     "source=${localEnv:HOME}/.claude,target=/mnt/host-claude,type=bind,readonly",
     "source=${localEnv:HOME}/.codex,target=/mnt/host-codex,type=bind,readonly",
     "source=${localEnv:HOME}/.gemini,target=/mnt/host-gemini,type=bind,readonly",
+    "source=${localEnv:HOME}/.forge,target=/mnt/host-forge,type=bind,readonly",
 
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
   ],
