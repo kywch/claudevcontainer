@@ -8,6 +8,10 @@
 !README.md
 !CLAUDE.md
 
+# VS Code workspace settings (watcher excludes etc.)
+!.vscode/
+!.vscode/settings.json
+
 # VPS deployment
 !docker-compose.vps.yml
 !.env.vps.example
