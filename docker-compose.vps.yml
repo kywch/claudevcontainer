@@ -29,7 +29,7 @@ services:
   # ARCHON_DOCKER=true — the image hardcodes /.archon).
   # ---------------------------------------------------------------------------
   archon:
-    image: ghcr.io/coleam00/archon:${ARCHON_VERSION:-0.3.5}
+    image: ghcr.io/coleam00/archon:${ARCHON_VERSION:-0.3.9}
     container_name: archon
     env_file: .env.vps
     environment:
@@ -78,6 +78,9 @@ services:
       ARCHON_HOME: /workspace/.archon
       NODE_OPTIONS: --max-old-space-size=4096
       CLAUDE_CONFIG_DIR: /home/agent/.claude
+      # Archon's compiled Bun binary needs an explicit claude path — it
+      # does not resolve via PATH. See devcontainer.json for the same var.
+      CLAUDE_BIN_PATH: /home/agent/.bun/bin/claude
       POWERLEVEL9K_DISABLE_GITSTATUS: "true"
     restart: unless-stopped
 

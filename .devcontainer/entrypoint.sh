@@ -48,14 +48,14 @@ fi
 rm -rf "$AGENT_STATE/claude/sessions"
 
 # 1c. Archon: ARCHON_HOME=/workspace/.archon (set in devcontainer.json) makes
-#     state persist on the bind mount. Two symlinks cover hardcoded paths:
-#       - workflows bridge for global discovery (workflow-discovery.ts:186)
-#       - workspaces off host FS for worktree I/O (archon-paths.ts:251)
+#     state persist on the bind mount. workspaces symlink still required for
+#     worktree I/O (archon-paths.ts:251). Legacy .archon/.archon/workflows
+#     bridge dropped — current archon reads /workspace/.archon/workflows
+#     directly; old nested dir is cleaned up if present.
 rm -f "$AGENT_HOME/.archon"
 ARCHON_ROOT=/workspace/.archon
-mkdir -p "$ARCHON_ROOT/workflows" "$ARCHON_ROOT/.archon" \
-         "$AGENT_HOME/.archon-worktrees"
-ln -sfn /workspace/.archon/workflows "$ARCHON_ROOT/.archon/workflows"
+mkdir -p "$ARCHON_ROOT/workflows" "$AGENT_HOME/.archon-worktrees"
+rm -rf "$ARCHON_ROOT/.archon"
 ln -sfn "$AGENT_HOME/.archon-worktrees" "$ARCHON_ROOT/workspaces"
 
 # 2. Seed config from image defaults.

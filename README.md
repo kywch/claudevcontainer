@@ -1,6 +1,6 @@
 # claudevcontainer
 
-A devcontainer for AI-assisted development with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), and [Gemini CLI](https://github.com/google/gemini-cli), plus a VPS deployment path that exposes the same workspace via Telegram (Slack/Discord optional).
+A devcontainer for AI-assisted development with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [Gemini CLI](https://github.com/google/gemini-cli), and [Forge](https://forgecode.dev/), plus a VPS deployment path that exposes the same workspace via Telegram (Slack/Discord optional).
 
 ## Local dev setup
 
@@ -18,6 +18,7 @@ Prerequisites: [Docker](https://docs.docker.com/get-docker/) + [VS Code](https:/
    claude        # subscription login (Max/Team/Enterprise) or API key
    codex login
    gemini        # OAuth flow
+   forge login   # forgecode.dev account
    gh auth login
    ```
    If you're already authenticated on the host, credentials are imported automatically. Host credentials are also refreshed into the container on restart when the host copy is newer, so renew browser-based auth on the host rather than inside Docker. Credentials persist in named Docker volumes across rebuilds. For third-party API providers (e.g. [Z.AI](https://docs.z.ai/devpack/tool/claude)), configure `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` in Claude's settings.
@@ -31,7 +32,8 @@ Prerequisites: [Docker](https://docs.docker.com/get-docker/) + [VS Code](https:/
 ### What's in the image
 
 - **Claude Code**, **Codex**, **Gemini CLI** — installed via bun, with [rtk](https://github.com/rtk-ai/rtk) token-compression hooks (~60–90% savings on tool output)
-- **Archon CLI** (v0.3.5) — `archon workflow run`, `archon chat`, `archon serve`
+- **Forge** (forgecode.dev) — GPT-5/Codex-backed planner (`muse`) and implementer (`forge`), wired as Claude Code subagents + a [forge-pipeline](.devcontainer/home/.claude/skills/forge-pipeline/) skill for chunked plan-then-execute runs
+- **Archon CLI** (v0.3.9) — `archon workflow run`, `archon chat`, `archon serve`
 - **Docker CLI** — host socket pass-through
 - **Dev tools** — zsh + plugins, fzf, gh, jq, nano, vim, uv, bun, node 20
 

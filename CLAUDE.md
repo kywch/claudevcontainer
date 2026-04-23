@@ -13,7 +13,7 @@ Both containers bind-mount `./` to `/workspace`. The bot's Archon state (`/.arch
 
 ```
 docker-compose.vps.yml
-├── archon   (ghcr.io/coleam00/archon:0.3.5)
+├── archon   (ghcr.io/coleam00/archon:0.3.9)
 │   ├── bind: ./  →  /workspace
 │   ├── vol:  archon_state → /.archon
 │   └── env:  TELEGRAM_BOT_TOKEN, PORT=3000, ARCHON_DOCKER=true

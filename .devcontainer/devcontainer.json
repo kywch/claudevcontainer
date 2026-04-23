@@ -64,6 +64,10 @@
   "containerEnv": {
     "NODE_OPTIONS": "--max-old-space-size=4096",
     "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
+    // Archon (compiled Bun binary) does not look on PATH for the claude
+    // executable — it requires an explicit path via CLAUDE_BIN_PATH or
+    // ~/.archon/config.yaml. Point at the bun-installed symlink.
+    "CLAUDE_BIN_PATH": "/home/agent/.bun/bin/claude",
     // Archon keeps all its state (SQLite DB, config, worktrees, web-dist) under
     // $ARCHON_HOME. Point it at /workspace/.archon so state persists on the
     // host bind mount across rebuilds AND lives next to committed custom

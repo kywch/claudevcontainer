@@ -10,5 +10,8 @@
       "Grep(*)",
       "Agent(*)"
     ]
+  },
+  "enabledPlugins": {
+    "codex@openai-codex": true
   }
 }
