@@ -62,7 +62,7 @@ ln -sfn "$AGENT_HOME/.archon-worktrees" "$ARCHON_ROOT/workspaces"
 #    Top-level files: overwrite every boot so repo edits propagate.
 #    Managed subdirs: mirror with --delete (stale entries removed).
 #    Other volume content (projects/, .credentials.json, etc.) is untouched.
-MANAGED_SUBDIRS=(commands agents skills hooks)
+MANAGED_SUBDIRS=(commands agents hooks)
 
 for tool in "${TOOLS[@]}"; do
   src="$DEFAULTS_ROOT/.$tool"
@@ -80,6 +80,20 @@ for tool in "${TOOLS[@]}"; do
     rsync -a --delete --no-owner --no-group \
       "$src/$subdir/" "$dst/$subdir/"
   done
+done
+
+# 2a. Shared skills dir: one canonical location at /workspace/.devcontainer/skills,
+#     symlinked into every tool's home. Bind-mounted, host-editable.
+SHARED_SKILLS=/workspace/.devcontainer/skills
+for tool in "${TOOLS[@]}"; do
+  dst="$AGENT_HOME/.$tool"
+  [ -d "$dst" ] || continue
+  target="$dst/skills"
+  if [ -L "$target" ] && [ "$(readlink "$target")" = "$SHARED_SKILLS" ]; then
+    continue
+  fi
+  rm -rf "$target"
+  ln -sfn "$SHARED_SKILLS" "$target"
 done
 
 # 2b. Install Claude Code plugins (idempotent — skips if already installed).

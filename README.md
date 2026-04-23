@@ -32,7 +32,7 @@ Prerequisites: [Docker](https://docs.docker.com/get-docker/) + [VS Code](https:/
 ### What's in the image
 
 - **Claude Code**, **Codex**, **Gemini CLI** — installed via bun, with [rtk](https://github.com/rtk-ai/rtk) token-compression hooks (~60–90% savings on tool output)
-- **Forge** (forgecode.dev) — GPT-5/Codex-backed planner (`muse`) and implementer (`forge`), wired as Claude Code subagents + a [forge-pipeline](.devcontainer/home/.claude/skills/forge-pipeline/) skill for chunked plan-then-execute runs
+- **Forge** (forgecode.dev) — GPT-5/Codex-backed planner (`muse`) and implementer (`forge`), wired as Claude Code subagents + a [forge-pipeline](.devcontainer/skills/forge-pipeline/) skill for chunked plan-then-execute runs
 - **Archon CLI** (v0.3.9) — `archon workflow run`, `archon chat`, `archon serve`
 - **Docker CLI** — host socket pass-through
 - **Dev tools** — zsh + plugins, fzf, gh, jq, nano, vim, uv, bun, node 20
