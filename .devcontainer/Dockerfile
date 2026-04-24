@@ -111,6 +111,9 @@ RUN bun install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli &&
   ln -sf ../install/global/node_modules/@anthropic-ai/claude-code/bin/claude.exe \
     /home/agent/.bun/bin/claude
 
+# Quint (TLA+-style executable spec language). Used by the quint-loop skill.
+RUN bun install -g @informalsystems/quint
+
 # Home-dir defaults. Entrypoint rsyncs these into the named volumes on
 # every container start. After bun install so edits are cheap to iterate.
 COPY --chown=$USERNAME:$USERNAME home/ /opt/devcontainer-home/
