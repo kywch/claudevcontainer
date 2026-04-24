@@ -83,12 +83,37 @@ for tool in "${TOOLS[@]}"; do
 done
 
 # 2a. Shared skills dir: one canonical location at /workspace/.devcontainer/skills,
-#     symlinked into every tool's home. Bind-mounted, host-editable.
+#     bind-mounted and host-editable.
+#
+#     Claude/Gemini/Forge: symlink the whole skills/ dir — they don't
+#     auto-install anything there, so the shared dir stays clean.
+#
+#     Codex: auto-populates $CODEX_HOME/skills/.system/ with bundled system
+#     skills on first run. Whole-dir symlink would dump those into the repo's
+#     bind mount. Instead, keep ~/.codex/skills as a real dir (system skills
+#     stay in the codex volume) and symlink user skills in individually.
 SHARED_SKILLS=/workspace/.devcontainer/skills
 for tool in "${TOOLS[@]}"; do
   dst="$AGENT_HOME/.$tool"
   [ -d "$dst" ] || continue
   target="$dst/skills"
+
+  if [ "$tool" = "codex" ]; then
+    # Migrate from old whole-dir symlink to real dir.
+    if [ -L "$target" ]; then
+      rm "$target"
+    fi
+    mkdir -p "$target"
+    # Clear stale symlinks pointing into the shared dir, then relink current skills.
+    find "$target" -maxdepth 1 -type l -lname "$SHARED_SKILLS/*" -delete 2>/dev/null || true
+    for skill_dir in "$SHARED_SKILLS"/*/; do
+      [ -d "$skill_dir" ] || continue
+      skill_name=$(basename "$skill_dir")
+      ln -sfn "$SHARED_SKILLS/$skill_name" "$target/$skill_name"
+    done
+    continue
+  fi
+
   if [ -L "$target" ] && [ "$(readlink "$target")" = "$SHARED_SKILLS" ]; then
     continue
   fi
