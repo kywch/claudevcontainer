@@ -6,7 +6,11 @@ A devcontainer for AI-assisted development with [Claude Code](https://docs.anthr
 
 Prerequisites: [Docker](https://docs.docker.com/get-docker/) + [VS Code](https://code.visualstudio.com/) with the [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension.
 
-> **GPU note:** To enable GPU passthrough, uncomment `"--gpus=all"` in `runArgs` in `.devcontainer/devcontainer.json`.
+> **IDE compatibility note:** Use Microsoft VS Code for the DevPod/Dev Containers flow here. VSCodium is not a drop-in replacement for this path and can fail during remote server install with errors like "cannot install VS Code on the server". If you want to stay on VSCodium, use plain SSH access to the workspace or DevPod's `openvscode` browser IDE instead of the VS Code desktop integration.
+
+> **VSCodium compatibility note:** The shared devcontainer profile now avoids the known-problem `Anthropic.claude-code` extension so the same JSON can be used from VS Code and VSCodium. You may still need proposed API flags for `3timeslazy.vscodium-devpodcontainers`, and some `openai.chatgpt` or `open-remote-ssh` builds can still fail on the current Codium build even with flags enabled.
+
+> **GPU note:** GPU passthrough is opt-in. Uncomment the GPU-related `runArgs` and `containerEnv` lines in `.devcontainer/devcontainer.json` only on hosts that expose those devices/runtime. If DevPod builds the image but fails while starting the container, leave those lines commented out first.
 
 1. Clone and open in VS Code:
    ```bash
@@ -28,6 +32,75 @@ Prerequisites: [Docker](https://docs.docker.com/get-docker/) + [VS Code](https:/
    claude auth login          # on the host
    # then restart/rebuild the devcontainer so the entrypoint refreshes ~/.claude
    ```
+
+   If the Codex/ChatGPT view is missing or blank inside the devcontainer, open `Preferences: Configure Runtime Arguments` in the host editor, add the proposed API flag there, and fully restart the editor:
+   ```json
+   {
+     "enable-proposed-api": ["openai.chatgpt"]
+   }
+   ```
+   The container cannot fix this by editing server-side `argv.json`; the flag has to be passed in from the host editor process.
+
+   For VSCodium on Linux, a useful host-side `argv.json` baseline is:
+   ```json
+   {
+     "enable-proposed-api": ["3timeslazy.vscodium-devpodcontainers"]
+   }
+   ```
+   Then fully restart VSCodium. If `openai.chatgpt` still logs missing proposals such as `languageModelProxy`, disable that extension in VSCodium for this workflow rather than trying to force it on.
+
+### Rebuilding after Dockerfile edits
+
+If the DevPod/Codium command is flaky, use the repo helper instead:
+
+```bash
+./.devcontainer/devpod-rebuild.sh
+```
+
+That recreates the current DevPod workspace with the local Docker provider and targets `codium` by default without forcing the IDE to open. It now uses the shared `.devcontainer/devcontainer.json` profile for both VS Code and VSCodium, which keeps `openai.chatgpt` and drops the problematic `Anthropic.claude-code` extension. To open Codium after the rebuild:
+
+```bash
+./.devcontainer/devpod-rebuild.sh --open
+```
+
+To use the browser IDE instead:
+
+```bash
+./.devcontainer/devpod-rebuild.sh --ide openvscode --open
+```
+
+To rebuild with NVIDIA GPU access so `nvidia-smi` works inside the DevPod workspace:
+
+```bash
+./.devcontainer/devpod-rebuild.sh --gpu
+```
+
+That uses `.devcontainer/devcontainer.gpu.json`, which adds `--gpus=all`, `/dev/dri`, and the NVIDIA env vars on hosts that support them.
+
+For Codium plus GPU, the helper uses the same shared `.devcontainer/devcontainer.gpu.json` profile.
+
+If you want to override the config profile explicitly:
+
+```bash
+./.devcontainer/devpod-rebuild.sh --devcontainer .devcontainer/devcontainer.json
+```
+
+### VSCodium-safe alternatives
+
+If you are using VSCodium and DevPod fails with "cannot install VS Code on the server", avoid the VS Code desktop integration and use one of these paths instead:
+
+1. **Recommended: browser IDE via OpenVSCode Server**
+   ```bash
+   devpod up . --ide openvscode
+   ```
+   DevPod starts the workspace and installs `openvscode-server` in the workspace instead of trying to pair VSCodium with Microsoft's VS Code server.
+
+2. **Terminal / editor-agnostic: SSH into the workspace**
+   ```bash
+   devpod up .
+   ssh <workspace-name>.devpod
+   ```
+   DevPod adds the `*.devpod` SSH host entry automatically. From there you can use the repo in a terminal, or point another SSH-capable editor at the workspace.
 
 ### What's in the image
 

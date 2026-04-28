@@ -19,6 +19,11 @@ for tool in "${TOOLS[@]}"; do
   sudo chown -R agent:agent "$AGENT_HOME/.$tool" 2>/dev/null || true
 done
 sudo chown -R agent:agent "$AGENT_HOME/.config/gh" 2>/dev/null || true
+sudo chown -R agent:agent "$AGENT_HOME/.ssh" 2>/dev/null || true
+# Remote editor servers sometimes self-bootstrap as root on first connect,
+# leaving agent unreadable extension indexes behind and crashing the remote EH.
+sudo chown -R agent:agent "$AGENT_HOME/.vscodium-server" 2>/dev/null || true
+sudo chown -R agent:agent "$AGENT_HOME/.vscode-server" 2>/dev/null || true
 
 # 1b. Relocate Claude + Gemini transcript dirs to /workspace bind mount for
 #     host-visible analysis. Claude auto-memory (projects/<hash>/memory/) rides
@@ -155,6 +160,21 @@ import_auth /mnt/host-codex/auth.json           "$AGENT_HOME/.codex/auth.json"
 import_auth /mnt/host-gemini/oauth_creds.json   "$AGENT_HOME/.gemini/oauth_creds.json"
 import_auth /mnt/host-forge/.credentials.json     "$AGENT_HOME/.forge/.credentials.json"
 import_auth /mnt/host-forge/.mcp-credentials.json "$AGENT_HOME/.forge/.mcp-credentials.json"
+
+import_ssh_dir() {
+  local src="$1" dst="$2"
+  if [ ! -d "$src" ]; then
+    return
+  fi
+
+  mkdir -p "$dst"
+  rsync -a --delete --no-owner --no-group "$src/" "$dst/"
+  chmod 700 "$dst"
+  find "$dst" -type d -exec chmod 700 {} +
+  find "$dst" -type f -exec chmod 600 {} +
+}
+
+import_ssh_dir /mnt/host-ssh "$AGENT_HOME/.ssh"
 
 # 4. Align docker group GID with host's /var/run/docker.sock (varies per host).
 #    New docker execs re-read /etc/group, so interactive shells pick up the

@@ -5,8 +5,11 @@ ENV TZ="$TZ"
 
 # Base tools. Generating en_US.UTF-8 silences setlocale warnings from VS
 # Code's forwarded LC_ALL (node:20 ships no generated locales).
+# Robotics sim deps installed in a separate apt-get below: OpenGL/EGL/X11/Vulkan userspace libs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bubblewrap fzf git gh jq less locales man-db nano procps rclone rsync sudo unzip vim zsh && \
+    bubblewrap fzf git gh jq less locales man-db nano procps rclone rsync sudo unzip vim vulkan-tools zsh && \
+  apt-get install -y --no-install-recommends \
+    libgl1 libegl1 libxext6 libvulkan1 && \
   echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && locale-gen && \
   apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -19,10 +22,10 @@ RUN usermod -l $USERNAME -d /home/$USERNAME -m node && \
 # per-tool home dirs (named volumes overlay these at runtime), and
 # passwordless sudo for agent (entrypoint uses it for first-boot chown).
 RUN mkdir -p /usr/local/share/npm-global /commandhistory /workspace \
-             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini /home/$USERNAME/.forge && \
+             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini /home/$USERNAME/.forge /home/$USERNAME/.ssh && \
   touch /commandhistory/.bash_history && \
   chown -R $USERNAME:$USERNAME /usr/local/share/npm-global /commandhistory /workspace \
-             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini /home/$USERNAME/.forge && \
+             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini /home/$USERNAME/.forge /home/$USERNAME/.ssh && \
   echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME-all && \
   chmod 0440 /etc/sudoers.d/$USERNAME-all
 

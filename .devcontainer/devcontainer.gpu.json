@@ -1,5 +1,5 @@
 {
-  "name": "Claude Code Sandbox",
+  "name": "Claude Code Sandbox (GPU)",
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
@@ -9,10 +9,9 @@
   },
   "runArgs": [
     "--init",
-    // Uncomment on hosts with GPU passthrough configured:
-    // "--gpus=all",
-    // "--device=/dev/dri",
-    // "--env=NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility"
+    "--gpus=all",
+    "--device=/dev/dri",
+    "--env=NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility"
   ],
   "forwardPorts": [3001, "9000-9100"],
   "customizations": {
@@ -35,56 +34,34 @@
     }
   },
   "remoteUser": "agent",
-  // Do NOT let VS Code replace our ENTRYPOINT with its default sleep-loop
-  // wrapper; we need devcontainer-entrypoint to run for volume chown, config
-  // seeding, and first-boot auth import.
   "overrideCommand": false,
   "initializeCommand": "mkdir -p ${localEnv:HOME}/.claude ${localEnv:HOME}/.codex ${localEnv:HOME}/.gemini ${localEnv:HOME}/.forge ${localEnv:HOME}/.ssh",
   "mounts": [
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
-
-    // Persistent state volumes (per workspace via devcontainerId).
-    // Entrypoint seeds config into these from /opt/devcontainer-home on each boot.
     "source=claude-home-${devcontainerId},target=/home/agent/.claude,type=volume",
     "source=codex-home-${devcontainerId},target=/home/agent/.codex,type=volume",
     "source=gemini-home-${devcontainerId},target=/home/agent/.gemini,type=volume",
     "source=forge-home-${devcontainerId},target=/home/agent/.forge,type=volume",
-    // gh token volume: no host bind, no entrypoint import. Run `gh auth login`
-    // once inside the container; the token persists across rebuilds in this volume.
     "source=gh-config-${devcontainerId},target=/home/agent/.config/gh,type=volume",
-
-    // Read-only host binds: source for first-boot auth import (entrypoint copies
-    // credentials from here into the volumes above). Safe to be empty.
     "source=${localEnv:HOME}/.claude,target=/mnt/host-claude,type=bind,readonly",
     "source=${localEnv:HOME}/.codex,target=/mnt/host-codex,type=bind,readonly",
     "source=${localEnv:HOME}/.gemini,target=/mnt/host-gemini,type=bind,readonly",
     "source=${localEnv:HOME}/.forge,target=/mnt/host-forge,type=bind,readonly",
     "source=${localEnv:HOME}/.ssh,target=/mnt/host-ssh,type=bind,readonly",
-
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
   ],
   "containerEnv": {
     "NODE_OPTIONS": "--max-old-space-size=4096",
     "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
-    // Archon (compiled Bun binary) does not look on PATH for the claude
-    // executable — it requires an explicit path via CLAUDE_BIN_PATH or
-    // ~/.archon/config.yaml. Point at the bun-installed symlink.
     "CLAUDE_BIN_PATH": "/home/agent/.bun/bin/claude",
-    // Archon keeps all its state (SQLite DB, config, worktrees, web-dist) under
-    // $ARCHON_HOME. Point it at /workspace/.archon so state persists on the
-    // host bind mount across rebuilds AND lives next to committed custom
-    // workflows at /workspace/.archon/workflows/. See entrypoint.sh step 1c
-    // for the two internal symlinks that cover gaps in Archon's configurability
-    // (global workflow discovery path + worktree location override).
     "ARCHON_HOME": "/workspace/.archon",
     "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
-    // Uncomment with the GPU runArgs above on NVIDIA hosts:
-    // "NVIDIA_VISIBLE_DEVICES": "all",
-    // "NVIDIA_DRIVER_CAPABILITIES": "graphics,compute,utility"
+    "NVIDIA_VISIBLE_DEVICES": "all",
+    "NVIDIA_DRIVER_CAPABILITIES": "graphics,compute,utility"
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
-"portsAttributes": {
+  "portsAttributes": {
     "3001": { "label": "Vite Dev Server" },
     "9000-9100": { "label": "App Services" }
   }
