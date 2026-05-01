@@ -176,7 +176,47 @@ import_ssh_dir() {
 
 import_ssh_dir /mnt/host-ssh "$AGENT_HOME/.ssh"
 
-# 4. Align docker group GID with host's /var/run/docker.sock (varies per host).
+# 4. DevPod may inject "credsStore": "devpod" into ~/.docker/config.json so
+#    workspace Docker commands reuse host credentials. That is convenient for
+#    pulls, but it can shadow `docker login` inside the container and break
+#    Docker Hub pushes when the forwarded credential is stale or empty. Remove
+#    only DevPod helper references; preserve ordinary auths and other Docker
+#    config so in-container login remains the source of truth.
+remove_devpod_docker_creds() {
+  local config_file="$1"
+  local tmp_config
+  [ -f "$config_file" ] || return
+  command -v jq >/dev/null 2>&1 || return
+
+  tmp_config="$(mktemp)"
+  if jq '
+    if .credsStore == "devpod" then del(.credsStore) else . end
+    | if (.credHelpers? | type) == "object" then
+        .credHelpers |= with_entries(select(.value != "devpod"))
+      else
+        .
+      end
+    | if ((.credHelpers? | type) == "object" and (.credHelpers | length) == 0) then
+        del(.credHelpers)
+      else
+        .
+      end
+  ' "$config_file" > "$tmp_config"; then
+    if sudo cp -f "$tmp_config" "$config_file" 2>/dev/null || cp -f "$tmp_config" "$config_file"; then
+      sudo chmod 600 "$config_file" 2>/dev/null || chmod 600 "$config_file" 2>/dev/null || true
+    fi
+    sudo chown agent:agent "$config_file" 2>/dev/null || true
+  fi
+  rm -f "$tmp_config"
+}
+
+docker_config_dir="${DOCKER_CONFIG:-$AGENT_HOME/.docker}"
+remove_devpod_docker_creds "$docker_config_dir/config.json"
+if [ "$docker_config_dir" != "$AGENT_HOME/.docker" ]; then
+  remove_devpod_docker_creds "$AGENT_HOME/.docker/config.json"
+fi
+
+# 5. Align docker group GID with host's /var/run/docker.sock (varies per host).
 #    New docker execs re-read /etc/group, so interactive shells pick up the
 #    realigned GID even though the entrypoint process itself can't.
 if [ -S /var/run/docker.sock ]; then
@@ -191,5 +231,5 @@ if [ -S /var/run/docker.sock ]; then
   fi
 fi
 
-# 5. Hand off to CMD.
+# 6. Hand off to CMD.
 exec "$@"
