@@ -30,7 +30,7 @@ docker-compose.vps.yml
 
 | File | Purpose |
 |---|---|
-| `.devcontainer/Dockerfile` | Devcontainer image: bun, node 20, Claude/Codex/Gemini/Forge CLIs, rtk hooks, Archon CLI |
+| `.devcontainer/Dockerfile` | Devcontainer image: bun, node 20, Claude/Codex/Gemini/Forge CLIs, Claude rtk hook, Archon CLI |
 | `.devcontainer/entrypoint.sh` | First-boot: volume chown, config seeding, host auth import, transcript relocation, Docker GID alignment |
 | `.devcontainer/devcontainer.json` | Shared VS Code/VSCodium config: volume mounts, host auth bind mounts, and the Codium-safe extension set |
 | `.devcontainer/devcontainer.gpu.json` | Shared GPU-enabled variant for hosts with NVIDIA passthrough configured |

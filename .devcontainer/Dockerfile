@@ -129,7 +129,7 @@ RUN cp /opt/devcontainer-home/.claude/settings.json /home/agent/.claude/settings
   rtk init -g --auto-patch && \
   cp /home/agent/.claude/settings.json /opt/devcontainer-home/.claude/settings.json
 
-# Codex prompt-level guidance (caveman style + rtk usage) is authored
+# Codex prompt-level guidance (caveman style only) is authored
 # directly in .devcontainer/home/.codex/AGENTS.md and placed by the COPY
 # above. `rtk init -g --codex` is intentionally NOT run — it would
 # overwrite AGENTS.md with a minimal @RTK.md stub.

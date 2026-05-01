@@ -108,7 +108,7 @@ If you are using VSCodium and DevPod fails with "cannot install VS Code on the s
 
 ### What's in the image
 
-- **Claude Code**, **Codex**, **Gemini CLI** — installed via bun, with [rtk](https://github.com/rtk-ai/rtk) token-compression hooks (~60–90% savings on tool output)
+- **Claude Code**, **Codex**, **Gemini CLI** — installed via bun. Claude Code also gets an [rtk](https://github.com/rtk-ai/rtk) token-compression hook (~60–90% savings on tool output); Codex does not depend on `rtk`
 - **Forge** (forgecode.dev) — GPT-5/Codex-backed planner (`muse`) and implementer (`forge`), wired as Claude Code subagents + a [forge-pipeline](.devcontainer/skills/forge-pipeline/) skill for chunked plan-then-execute runs
 - **Archon CLI** (v0.3.9) — `archon workflow run`, `archon chat`, `archon serve`
 - **Docker CLI** — host socket pass-through

@@ -32,20 +32,3 @@ Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
 ## Auto-Clarity Exception
 
 Drop caveman temporarily for: security warnings, irreversible action confirmations, multi-step sequences where fragment order risks misread, user asks to clarify or repeats question. Resume caveman after clear part done.
-
----
-
-# RTK — Rust Token Killer
-
-Always prefix shell commands with `rtk` (token-optimized CLI proxy).
-
-Examples:
-
-```bash
-rtk git status
-rtk cargo test
-rtk npm run build
-rtk pytest -q
-```
-
-Meta: `rtk gain` (savings analytics), `rtk gain --history`, `rtk proxy <cmd>` (raw, no filter).
