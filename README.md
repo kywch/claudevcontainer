@@ -10,6 +10,8 @@ Prerequisites: [Docker](https://docs.docker.com/get-docker/) + [VS Code](https:/
 
 > **VSCodium compatibility note:** The shared devcontainer profile now avoids the known-problem `Anthropic.claude-code` extension so the same JSON can be used from VS Code and VSCodium. You may still need proposed API flags for `3timeslazy.vscodium-devpodcontainers`, and some `openai.chatgpt` or `open-remote-ssh` builds can still fail on the current Codium build even with flags enabled.
 
+> **Codex version note:** VSCodium can install an older `openai.chatgpt` build inside the remote extension host even when the host editor has a newer `26.x` build. On attach, this repo now checks the host-side VSIX caches and upgrades the devcontainer target to the newest cached `26.x` Codex extension when available.
+
 > **GPU note:** GPU passthrough is opt-in. Uncomment the GPU-related `runArgs` and `containerEnv` lines in `.devcontainer/devcontainer.json` only on hosts that expose those devices/runtime. If DevPod builds the image but fails while starting the container, leave those lines commented out first.
 
 1. Clone and open in VS Code:
@@ -48,6 +50,8 @@ Prerequisites: [Docker](https://docs.docker.com/get-docker/) + [VS Code](https:/
    }
    ```
    Then fully restart VSCodium. If `openai.chatgpt` still logs missing proposals such as `languageModelProxy`, disable that extension in VSCodium for this workflow rather than trying to force it on.
+
+   The devcontainer-side `26.x` upgrade path relies on a host-cached VSIX. Install or update the host `openai.chatgpt` extension first so VSCodium or VS Code caches a current package, then reopen the devcontainer.
 
 ### Rebuilding after Dockerfile edits
 

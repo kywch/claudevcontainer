@@ -34,6 +34,7 @@ docker-compose.vps.yml
 | `.devcontainer/entrypoint.sh` | First-boot: volume chown, config seeding, host auth import, transcript relocation, Docker GID alignment |
 | `.devcontainer/devcontainer.json` | Shared VS Code/VSCodium config: volume mounts, host auth bind mounts, and the Codium-safe extension set |
 | `.devcontainer/devcontainer.gpu.json` | Shared GPU-enabled variant for hosts with NVIDIA passthrough configured |
+| `.devcontainer/install-openai-chatgpt-vsix.sh` | Post-attach helper that upgrades the remote `openai.chatgpt` extension to the newest cached host-side `26.x` VSIX when available |
 | `.devcontainer/devpod-rebuild.sh` | Preferred local DevPod rebuild wrapper for agents after `.devcontainer/` edits |
 | `docker-compose.vps.yml` | VPS services: archon bot + workstation |
 | `.env.vps.example` | Template for VPS env vars (auth, bot tokens, streaming mode) |

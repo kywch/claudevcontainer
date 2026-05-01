@@ -18,14 +18,10 @@
   "customizations": {
     "vscode": {
       "extensions": [
-        "dbaeumer.vscode-eslint",
-        "esbenp.prettier-vscode",
-        "eamodio.gitlens",
         "openai.chatgpt"
       ],
       "settings": {
         "editor.formatOnSave": true,
-        "editor.defaultFormatter": "esbenp.prettier-vscode",
         "terminal.integrated.defaultProfile.linux": "zsh",
         "terminal.integrated.enablePersistentSessions": true,
         "terminal.integrated.persistentSessionReviveProcess": "onExitAndWindowClose",
@@ -39,7 +35,7 @@
   // wrapper; we need devcontainer-entrypoint to run for volume chown, config
   // seeding, and first-boot auth import.
   "overrideCommand": false,
-  "initializeCommand": "mkdir -p ${localEnv:HOME}/.claude ${localEnv:HOME}/.codex ${localEnv:HOME}/.gemini ${localEnv:HOME}/.forge ${localEnv:HOME}/.ssh",
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/.claude ${localEnv:HOME}/.codex ${localEnv:HOME}/.gemini ${localEnv:HOME}/.forge ${localEnv:HOME}/.ssh ${localEnv:HOME}/.config/Code/CachedExtensionVSIXs ${localEnv:HOME}/.config/VSCodium/CachedExtensionVSIXs",
   "mounts": [
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
 
@@ -60,6 +56,10 @@
     "source=${localEnv:HOME}/.gemini,target=/mnt/host-gemini,type=bind,readonly",
     "source=${localEnv:HOME}/.forge,target=/mnt/host-forge,type=bind,readonly",
     "source=${localEnv:HOME}/.ssh,target=/mnt/host-ssh,type=bind,readonly",
+    // Read-only extension sources so postAttach can upgrade the remote Codex
+    // extension to the newer host-side 26.x VSIX when available.
+    "source=${localEnv:HOME}/.config/Code/CachedExtensionVSIXs,target=/mnt/host-vscode-vsix-cache,type=bind,readonly",
+    "source=${localEnv:HOME}/.config/VSCodium/CachedExtensionVSIXs,target=/mnt/host-vscodium-vsix-cache,type=bind,readonly",
 
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
   ],
@@ -82,6 +82,7 @@
     // "NVIDIA_VISIBLE_DEVICES": "all",
     // "NVIDIA_DRIVER_CAPABILITIES": "graphics,compute,utility"
   },
+  "postAttachCommand": "bash .devcontainer/install-openai-chatgpt-vsix.sh",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
 "portsAttributes": {
