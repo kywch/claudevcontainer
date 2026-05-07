@@ -27,8 +27,9 @@ sudo chown -R agent:agent "$AGENT_HOME/.vscode-server" 2>/dev/null || true
 
 # 1b. Relocate Claude + Gemini transcript dirs to /workspace bind mount for
 #     host-visible analysis. Claude auto-memory (projects/<hash>/memory/) rides
-#     along as a child of projects/. Codex skipped: guards against symlinked
-#     state roots. Must run pre-session — live fds would be severed.
+#     along as a child of projects/. Codex live state stays in the volume:
+#     guards reject symlinked state roots. Must run pre-session — live fds
+#     would be severed.
 relocate_symlink() {
   local vol_path="$1"
   local ws_path="$2"
@@ -44,6 +45,20 @@ for sub in projects todos shell-snapshots; do
   relocate_symlink "$AGENT_HOME/.claude/$sub" "$AGENT_STATE/claude/$sub"
 done
 relocate_symlink "$AGENT_HOME/.gemini/tmp" "$AGENT_STATE/gemini/tmp"
+
+# Codex session transcripts are safe to copy, but not safe to relocate with
+# symlinks. Mirror them into the workspace so rebuilds/recreates do not strand
+# existing JSONL rollouts in the codex-home volume.
+sync_codex_sessions() {
+  mkdir -p "$AGENT_STATE/codex"
+  if [ -d "$AGENT_HOME/.codex/sessions" ]; then
+    rsync -a "$AGENT_HOME/.codex/sessions/" "$AGENT_STATE/codex/sessions/" 2>/dev/null || true
+  fi
+  if [ -f "$AGENT_HOME/.codex/session_index.jsonl" ]; then
+    cp -f "$AGENT_HOME/.codex/session_index.jsonl" "$AGENT_STATE/codex/session_index.jsonl" 2>/dev/null || true
+  fi
+}
+sync_codex_sessions
 
 # Migration: sessions/ is per-PID liveness metadata (not transcripts) — was
 # pointless to relocate. Clean up stale symlink + orphan workspace dir.
@@ -231,5 +246,12 @@ if [ -S /var/run/docker.sock ]; then
   fi
 fi
 
-# 6. Hand off to CMD.
+# 6. Keep Codex session backups fresh while the container is alive.
+(
+  while sleep 300; do
+    sync_codex_sessions
+  done
+) &
+
+# 7. Hand off to CMD.
 exec "$@"
