@@ -9,12 +9,15 @@
   },
   "runArgs": [
     "--init",
+    "--network=host",
     // Uncomment on hosts with GPU passthrough configured:
     // "--gpus=all",
     // "--device=/dev/dri",
     // "--env=NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility"
   ],
-  "forwardPorts": [3001, "9000-9100"],
+  // forwardPorts is incompatible with --network=host (ports are already
+  // accessible on the host). Kept commented for reference.
+  // "forwardPorts": [3001, "9000-9100"],
   "customizations": {
     "vscode": {
       "extensions": [

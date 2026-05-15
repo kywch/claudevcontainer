@@ -7,8 +7,15 @@ expected_version="${OPENAI_CHATGPT_REMOTE_VERSION:-0.4.78}"
 minimum_codex_cli_version="${OPENAI_CHATGPT_MIN_CODEX_CLI_VERSION:-0.130.0}"
 
 extension_roots=(
+  "$HOME/.vscode/extensions"
+  "$HOME/.vscode-oss/extensions"
+  "$HOME/.vscodium/extensions"
   "$HOME/.vscodium-server/extensions"
   "$HOME/.vscode-server/extensions"
+  "$HOME/.vscode-server-insiders/extensions"
+  "$HOME/.openvscode-server/extensions"
+  "$HOME/.cursor-server/extensions"
+  "$HOME/.windsurf-server/extensions"
 )
 
 find_editor_cli() {
@@ -22,6 +29,8 @@ find_editor_cli() {
   fi
 
   find "$HOME/.vscodium-server/bin" "$HOME/.vscode-server/bin" \
+    "$HOME/.vscode-server-insiders/bin" "$HOME/.openvscode-server/bin" \
+    "$HOME/.cursor-server/bin" "$HOME/.windsurf-server/bin" \
     -path "*/bin/remote-cli/codium" -o \
     -path "*/bin/remote-cli/code" \
     2>/dev/null | sort -V | tail -n 1
@@ -67,12 +76,24 @@ codex_version() {
   "$codex_bin" --version 2>/dev/null | awk '{ print $2; exit }'
 }
 
+codex_platform_dir() {
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) echo "linux-x86_64" ;;
+    Linux-aarch64|Linux-arm64) echo "linux-aarch64" ;;
+    Darwin-x86_64) echo "macos-x86_64" ;;
+    Darwin-arm64) echo "macos-aarch64" ;;
+  esac
+}
+
 find_cli_codex_binary() {
   local candidate
 
   for candidate in \
     "$HOME/.bun/install/global/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex" \
-    "$HOME/.bun/install/global/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex/codex"
+    "$HOME/.bun/install/global/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex/codex" \
+    "$HOME"/.nvm/versions/node/*/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex \
+    "$HOME"/.nvm/versions/node/*/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex/codex \
+    "$(command -v codex 2>/dev/null || true)"
   do
     [ -x "$candidate" ] || continue
     echo "$candidate"
@@ -81,7 +102,7 @@ find_cli_codex_binary() {
 }
 
 patch_extension_codex_binary() {
-  local root extension_dir bundled_bin bundled_version cli_bin cli_version
+  local root extension_dir bundled_bin bundled_version cli_bin cli_version platform_dir
 
   cli_bin="$(find_cli_codex_binary || true)"
   [ -n "$cli_bin" ] || return 0
@@ -90,18 +111,20 @@ patch_extension_codex_binary() {
   if version_lt "$cli_version" "$minimum_codex_cli_version"; then
     return 0
   fi
+  platform_dir="$(codex_platform_dir || true)"
+  [ -n "$platform_dir" ] || return 0
 
   for root in "${extension_roots[@]}"; do
     [ -d "$root" ] || continue
     for extension_dir in "$root"/openai.chatgpt-*; do
       [ -d "$extension_dir" ] || continue
-      bundled_bin="$extension_dir/bin/linux-x86_64/codex"
+      bundled_bin="$extension_dir/bin/$platform_dir/codex"
       [ -e "$bundled_bin" ] || continue
       bundled_version="$(codex_version "$bundled_bin" || true)"
       if [ -z "$bundled_version" ] || version_lt "$bundled_version" "$minimum_codex_cli_version"; then
         cp -f "$cli_bin" "$bundled_bin"
         chmod 755 "$bundled_bin"
-        echo "[codex-vsix] Patched extension Codex CLI ${bundled_version:-unknown} -> $cli_version."
+        echo "[codex-vsix] Patched extension Codex CLI ${bundled_version:-unknown} -> $cli_version at ${bundled_bin#$HOME/}."
       fi
     done
   done
@@ -132,6 +155,7 @@ fi
 editor_cli="$(find_editor_cli || true)"
 cli_version="$(installed_version_from_cli "$editor_cli" || true)"
 if [ "$cli_version" = "$expected_version" ]; then
+  patch_extension_codex_binary
   echo "[codex-vsix] Remote $extension_id is $cli_version."
   exit 0
 fi
