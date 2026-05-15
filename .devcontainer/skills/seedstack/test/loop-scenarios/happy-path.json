@@ -1,0 +1,39 @@
+{
+  "name": "happy-path",
+  "seed": "seed-fixture-0001",
+  "must_emit": [
+    {
+      "event": "dirty_check",
+      "fields": {
+        "ok": true,
+        "seed": "seed-fixture-0001"
+      }
+    },
+    {
+      "event": "dispatch_exact_validation",
+      "fields": {
+        "ok": true,
+        "seed": "seed-fixture-0001"
+      }
+    },
+    {
+      "event": "reconcile_result",
+      "fields": {
+        "ok": true,
+        "decision": "manage_reconcile",
+        "seed": "seed-fixture-0001"
+      }
+    },
+    {
+      "event": "manage_result",
+      "fields": {
+        "decision": "continue_other_seeds",
+        "seed": "seed-fixture-0001"
+      }
+    }
+  ],
+  "expected": {
+    "exit_code": 0,
+    "final_state": "done"
+  }
+}

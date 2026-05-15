@@ -1,0 +1,29 @@
+{
+  "name": "stop-after-seed-idle-start",
+  "seed": "seed-fixture-0015",
+  "prewrite_stop_after_seed": {
+    "reason": "fixture stale stop request"
+  },
+  "event_assertions": {
+    "counts": [
+      {
+        "event": "dispatch_child_start",
+        "fields": {},
+        "count": 0
+      },
+      {
+        "event": "scan",
+        "fields": {},
+        "count": 0
+      }
+    ]
+  },
+  "expected": {
+    "exit_code": 0,
+    "final_state": "idle",
+    "reason": "stop_after_seed_requested",
+    "final_fields": {
+      "seed": "none"
+    }
+  }
+}

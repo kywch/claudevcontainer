@@ -1,0 +1,32 @@
+{
+  "name": "dispatch-validation-blocked",
+  "seed": "seed-fixture-0002",
+  "state": {
+    "dispatch": {
+      "decision": "closed",
+      "execute_verdict": "block",
+      "execute_recommendation": "close"
+    }
+  },
+  "must_emit": [
+    {
+      "event": "dirty_check",
+      "fields": {
+        "ok": true,
+        "seed": "seed-fixture-0002"
+      }
+    },
+    {
+      "event": "dispatch_exact_validation",
+      "fields": {
+        "ok": false,
+        "seed": "seed-fixture-0002"
+      }
+    }
+  ],
+  "expected": {
+    "exit_code": 1,
+    "final_state": "blocked",
+    "reason": "dispatch_exact_validation_failed"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "unexpected-dirty-before-next-seed",
+  "seed": "seed-fixture-0007a",
+  "adopted_seeds": [
+    "seed-fixture-0007a",
+    "seed-fixture-0007b"
+  ],
+  "state": {
+    "issues": [
+      {
+        "id": "seed-fixture-0007a",
+        "title": "Fixture seed-fixture-0007a",
+        "status": "open",
+        "labels": [
+          "fixture"
+        ],
+        "priority": 1,
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "closedAt": null,
+        "assignee": null,
+        "blockedBy": [],
+        "blocks": []
+      },
+      {
+        "id": "seed-fixture-0007b",
+        "title": "Fixture seed-fixture-0007b",
+        "status": "open",
+        "labels": [
+          "fixture"
+        ],
+        "priority": 1,
+        "createdAt": "2026-01-01T00:00:01.000Z",
+        "updatedAt": "2026-01-01T00:00:01.000Z",
+        "closedAt": null,
+        "assignee": null,
+        "blockedBy": [],
+        "blocks": []
+      }
+    ],
+    "dispatch": {
+      "decision": "closed",
+      "dirty_paths": [
+        "seed-fixture-0007a.txt"
+      ],
+      "write_files": [
+        {
+          "path": "seed-fixture-0007a.txt",
+          "content": "left dirty for next seed guard\n"
+        }
+      ]
+    }
+  },
+  "must_emit": [
+    {
+      "event": "dirty_check",
+      "fields": {
+        "ok": true,
+        "seed": "seed-fixture-0007b"
+      }
+    }
+  ],
+  "expected": {
+    "exit_code": 1,
+    "final_state": "blocked",
+    "reason": "unexpected_dirty",
+    "final_fields": {
+      "unexpected_paths": [
+        "seed-fixture-0007a.txt"
+      ]
+    }
+  }
+}

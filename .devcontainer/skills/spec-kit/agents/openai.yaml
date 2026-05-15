@@ -1,0 +1,6 @@
+interface:
+  display_name: "Spec Kit"
+  short_description: "Build and refine specs with conformance"
+  default_prompt: "Use $spec-kit to turn this rough behavior into a durable spec with decisions, conformance, and implementation guidance."
+policy:
+  allow_implicit_invocation: true

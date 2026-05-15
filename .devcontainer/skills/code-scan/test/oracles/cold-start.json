@@ -1,0 +1,45 @@
+{
+  "target": ".devcontainer/skills/code-scan/test/cold-start",
+  "required": [
+    {
+      "file": "sample_small.go",
+      "line": 10,
+      "snippet": "data, _ := os.ReadFile(path)",
+      "tag": "silent-discard",
+      "tier": "P1",
+      "min_sites": 1
+    },
+    {
+      "file": "sample_small.go",
+      "line": 17,
+      "snippet": "return config[key].(string)",
+      "tag": "type-assertion-panic",
+      "tier": "P0",
+      "min_sites": 1
+    },
+    {
+      "file": "sample_medium.go",
+      "line": 36,
+      "snippet": "out := tags[:0]",
+      "tag": "slice-aliasing",
+      "tier": "P0",
+      "min_sites": 1
+    },
+    {
+      "file": "sample_medium.go",
+      "line": 45,
+      "snippet": "func sortRecords(records []map[string]any) {",
+      "tag": "divergence",
+      "tier": "P1",
+      "min_sites": 2
+    },
+    {
+      "file": "sample_medium.go",
+      "line": 77,
+      "snippet": "return nil, fmt.Errorf(\"NOT_FOUND\")",
+      "tag": "divergence",
+      "tier": "P2",
+      "min_sites": 4
+    }
+  ]
+}

@@ -1,0 +1,398 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseArgs, validateDispatch, writeJson } from "./validate-dispatch-work.ts";
+import { compactPromptFixture, initGitRepo, legacyPromptFixture, makeFixtureRound, mutateLaunchEvidence, promptFixture, writeSeedIssue } from "./validate-dispatch-work-fixtures.ts";
+
+export function runSelfTest(pretty: boolean): number {
+  const root = mkdtempSync(join(tmpdir(), "dispatch-validate-"));
+  try {
+    const repo = join(root, "repo");
+    const seed = "seedspec-test";
+    const roundPath = join(repo, "tmp/dispatch-work", seed, "round-1");
+    makeFixtureRound(repo, seed, roundPath, "pass", "close", true);
+    const valid = validateDispatch({ ...parseArgs([]), repo, seed });
+
+    const missingSummaryRepo = join(root, "missing-summary-repo");
+    makeFixtureRound(missingSummaryRepo, seed, join(missingSummaryRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(join(missingSummaryRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-report.md"), "# Implement Report\n\nOutcome: done\n\nRecommendation: close\n");
+    const missingSummary = validateDispatch({ ...parseArgs([]), repo: missingSummaryRepo, seed });
+    const missingSummaryLoop = validateDispatch({ ...parseArgs([]), repo: missingSummaryRepo, seed, validationPolicy: "loop" });
+
+    const summaryKeysWithoutHeadingRepo = join(root, "summary-keys-without-heading-repo");
+    makeFixtureRound(summaryKeysWithoutHeadingRepo, seed, join(summaryKeysWithoutHeadingRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(summaryKeysWithoutHeadingRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-report.md"),
+      [
+        "# Implement Report",
+        "",
+        "status: done",
+        "changed_files: src/fixture.ts",
+        "tests: not run",
+        "blockers: none",
+        "next_action: close",
+        "",
+        "Outcome: done",
+        "",
+        "Recommendation: close",
+        "",
+      ].join("\n"),
+    );
+    const summaryKeysWithoutHeading = validateDispatch({ ...parseArgs([]), repo: summaryKeysWithoutHeadingRepo, seed });
+
+    const missingSummaryKeyRepo = join(root, "missing-summary-key-repo");
+    makeFixtureRound(missingSummaryKeyRepo, seed, join(missingSummaryKeyRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const missingSummaryKeyPath = join(missingSummaryKeyRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-report.md");
+    writeFileSync(
+      missingSummaryKeyPath,
+      readFileSync(missingSummaryKeyPath, "utf8").replace(/^tests: .*\n/m, ""),
+    );
+    const missingSummaryKey = validateDispatch({ ...parseArgs([]), repo: missingSummaryKeyRepo, seed });
+    const missingSummaryKeyLoop = validateDispatch({ ...parseArgs([]), repo: missingSummaryKeyRepo, seed, validationPolicy: "loop" });
+
+    const invalidSummaryOrderRepo = join(root, "invalid-summary-order-repo");
+    makeFixtureRound(invalidSummaryOrderRepo, seed, join(invalidSummaryOrderRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const invalidSummaryOrderPath = join(invalidSummaryOrderRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-report.md");
+    writeFileSync(
+      invalidSummaryOrderPath,
+      readFileSync(invalidSummaryOrderPath, "utf8").replace(
+        "status: done\nchanged_files: src/fixture.ts",
+        "changed_files: src/fixture.ts\nstatus: done",
+      ),
+    );
+    const invalidSummaryOrder = validateDispatch({ ...parseArgs([]), repo: invalidSummaryOrderRepo, seed });
+
+    const invalidSummaryValueRepo = join(root, "invalid-summary-value-repo");
+    makeFixtureRound(invalidSummaryValueRepo, seed, join(invalidSummaryValueRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const invalidSummaryValuePath = join(invalidSummaryValueRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-report.md");
+    writeFileSync(
+      invalidSummaryValuePath,
+      readFileSync(invalidSummaryValuePath, "utf8").replace("next_action: close", "next_action: ship-it"),
+    );
+    const invalidSummaryValue = validateDispatch({ ...parseArgs([]), repo: invalidSummaryValueRepo, seed });
+
+    const badExecuteRepo = join(root, "bad-execute-repo");
+    makeFixtureRound(badExecuteRepo, seed, join(badExecuteRepo, "tmp/dispatch-work", seed, "round-1"), "block", "close", true);
+    const badExecute = validateDispatch({ ...parseArgs([]), repo: badExecuteRepo, seed });
+
+    const v1Repo = join(root, "v1-repo");
+    makeFixtureRound(v1Repo, seed, join(v1Repo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v1");
+    const v1 = validateDispatch({ ...parseArgs([]), repo: v1Repo, seed });
+
+    const dirtyRepo = join(root, "dirty-repo");
+    makeFixtureRound(dirtyRepo, seed, join(dirtyRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", {
+      role: "review",
+      state: "failed_exit",
+      exitCode: "1",
+      failureCapsule: false,
+    });
+    const dirty = validateDispatch({ ...parseArgs([]), repo: dirtyRepo, seed });
+
+    const noEvidenceRepo = join(root, "no-evidence-repo");
+    makeFixtureRound(noEvidenceRepo, seed, join(noEvidenceRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", false);
+    const noEvidence = validateDispatch({ ...parseArgs([]), repo: noEvidenceRepo, seed });
+
+    const numberedReviewRepo = join(root, "numbered-review-repo");
+    makeFixtureRound(numberedReviewRepo, seed, join(numberedReviewRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-1.md");
+    const numberedReview = validateDispatch({ ...parseArgs([]), repo: numberedReviewRepo, seed });
+
+    const staleRepo = join(root, "stale-repo");
+    makeFixtureRound(staleRepo, seed, join(staleRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const oldDate = new Date("2025-01-01T00:00:00Z");
+    utimesSync(join(staleRepo, "tmp/dispatch-work", seed, "round-1/executor-report.md"), oldDate, oldDate);
+    const stale = validateDispatch({ ...parseArgs([]), repo: staleRepo, seed });
+    const staleLoop = validateDispatch({ ...parseArgs([]), repo: staleRepo, seed, validationPolicy: "loop" });
+
+    const weakLivenessRepo = join(root, "weak-liveness-repo");
+    makeFixtureRound(weakLivenessRepo, seed, join(weakLivenessRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", true, "pid:1");
+    const weakLiveness = validateDispatch({ ...parseArgs([]), repo: weakLivenessRepo, seed });
+    const weakLivenessLoop = validateDispatch({ ...parseArgs([]), repo: weakLivenessRepo, seed, validationPolicy: "loop" });
+
+    const mismatchedLauncherRepo = join(root, "mismatched-launcher-repo");
+    makeFixtureRound(mismatchedLauncherRepo, seed, join(mismatchedLauncherRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", true, "pid:2");
+    const mismatchedLauncher = validateDispatch({ ...parseArgs([]), repo: mismatchedLauncherRepo, seed });
+
+    const fakeSpawnRepo = join(root, "fake-spawn-repo");
+    makeFixtureRound(fakeSpawnRepo, seed, join(fakeSpawnRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", true, "spawn_agent:fake");
+    const fakeSpawn = validateDispatch({ ...parseArgs([]), repo: fakeSpawnRepo, seed });
+
+    const roleNameSpawnRepo = join(root, "role-name-spawn-repo");
+    makeFixtureRound(roleNameSpawnRepo, seed, join(roleNameSpawnRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", true, "spawn_agent:review-code");
+    const roleNameSpawn = validateDispatch({ ...parseArgs([]), repo: roleNameSpawnRepo, seed });
+
+    const sessionCurrentRepo = join(root, "session-current-repo");
+    makeFixtureRound(sessionCurrentRepo, seed, join(sessionCurrentRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", true, "session:codex-current");
+    const sessionCurrent = validateDispatch({ ...parseArgs([]), repo: sessionCurrentRepo, seed });
+
+    const missingLaunchEvidenceRepo = join(root, "missing-launch-evidence-repo");
+    makeFixtureRound(missingLaunchEvidenceRepo, seed, join(missingLaunchEvidenceRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", true, "spawn_agent:fixture", false);
+    const missingLaunchEvidence = validateDispatch({ ...parseArgs([]), repo: missingLaunchEvidenceRepo, seed });
+
+    const missingEvidenceContractRepo = join(root, "missing-evidence-contract-repo");
+    makeFixtureRound(missingEvidenceContractRepo, seed, join(missingEvidenceContractRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    mutateLaunchEvidence(missingEvidenceContractRepo, seed, "implement", (evidence) => delete evidence.contract);
+    const missingEvidenceContract = validateDispatch({ ...parseArgs([]), repo: missingEvidenceContractRepo, seed });
+
+    const missingEvidenceOwnerRepo = join(root, "missing-evidence-owner-repo");
+    makeFixtureRound(missingEvidenceOwnerRepo, seed, join(missingEvidenceOwnerRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    mutateLaunchEvidence(missingEvidenceOwnerRepo, seed, "implement", (evidence) => delete evidence.status_writer);
+    const missingEvidenceOwner = validateDispatch({ ...parseArgs([]), repo: missingEvidenceOwnerRepo, seed });
+
+    const supervisorNoEvidenceRepo = join(root, "supervisor-no-evidence-repo");
+    makeFixtureRound(supervisorNoEvidenceRepo, seed, join(supervisorNoEvidenceRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", true, "supervisor:run-1", false, "supervisor");
+    const supervisorNoEvidence = validateDispatch({ ...parseArgs([]), repo: supervisorNoEvidenceRepo, seed });
+
+    const badAttemptRepo = join(root, "bad-attempt-repo");
+    makeFixtureRound(badAttemptRepo, seed, join(badAttemptRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(join(badAttemptRepo, "tmp/dispatch-work", seed, "round-1/implement-a1.status"), readFileSync(join(badAttemptRepo, "tmp/dispatch-work", seed, "round-1/implement-a1.status"), "utf8").replace("attempt=1", "attempt=0"));
+    const badAttempt = validateDispatch({ ...parseArgs([]), repo: badAttemptRepo, seed });
+
+    const placeholderRepo = join(root, "placeholder-repo");
+    makeFixtureRound(placeholderRepo, seed, join(placeholderRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", true, "spawn_agent:fixture");
+    writeFileSync(join(placeholderRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"), "placeholder\n");
+    const placeholder = validateDispatch({ ...parseArgs([]), repo: placeholderRepo, seed });
+
+    const promptMismatchRepo = join(root, "prompt-mismatch-repo");
+    makeFixtureRound(promptMismatchRepo, seed, join(promptMismatchRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(join(promptMismatchRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"), promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "wrong-report.md"));
+    const promptMismatch = validateDispatch({ ...parseArgs([]), repo: promptMismatchRepo, seed });
+
+    const promptLaunchMissingRepo = join(root, "prompt-launch-missing-repo");
+    makeFixtureRound(promptLaunchMissingRepo, seed, join(promptLaunchMissingRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const promptLaunchMissingPath = join(promptLaunchMissingRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md");
+    writeFileSync(
+      promptLaunchMissingPath,
+      readFileSync(promptLaunchMissingPath, "utf8")
+        .replace(/\slaunch_evidence_path="[^"]+"/, "")
+        .replace(/^<launch_provenance\b.*\n/m, ""),
+    );
+    const promptLaunchMissing = validateDispatch({ ...parseArgs([]), repo: promptLaunchMissingRepo, seed });
+
+    const promptIoMissingAttrRepo = join(root, "prompt-io-missing-attr-repo");
+    makeFixtureRound(promptIoMissingAttrRepo, seed, join(promptIoMissingAttrRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const promptIoMissingAttrPath = join(promptIoMissingAttrRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md");
+    writeFileSync(
+      promptIoMissingAttrPath,
+      readFileSync(promptIoMissingAttrPath, "utf8").replace(/\sstatus_path="[^"]+"/, ""),
+    );
+    const promptIoMissingAttr = validateDispatch({ ...parseArgs([]), repo: promptIoMissingAttrRepo, seed });
+
+    const promptIoNoPollingWrongRepo = join(root, "prompt-io-no-polling-wrong-repo");
+    makeFixtureRound(promptIoNoPollingWrongRepo, seed, join(promptIoNoPollingWrongRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const promptIoNoPollingWrongPath = join(promptIoNoPollingWrongRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md");
+    writeFileSync(
+      promptIoNoPollingWrongPath,
+      readFileSync(promptIoNoPollingWrongPath, "utf8").replace('no_parent_transcript_polling="true"', 'no_parent_transcript_polling="false"'),
+    );
+    const promptIoNoPollingWrong = validateDispatch({ ...parseArgs([]), repo: promptIoNoPollingWrongRepo, seed });
+
+    const promptIoNoPollingMissingRepo = join(root, "prompt-io-no-polling-missing-repo");
+    makeFixtureRound(promptIoNoPollingMissingRepo, seed, join(promptIoNoPollingMissingRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const promptIoNoPollingMissingPath = join(promptIoNoPollingMissingRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md");
+    writeFileSync(
+      promptIoNoPollingMissingPath,
+      readFileSync(promptIoNoPollingMissingPath, "utf8").replace(/\sno_parent_transcript_polling="true"/, ""),
+    );
+    const promptIoNoPollingMissing = validateDispatch({ ...parseArgs([]), repo: promptIoNoPollingMissingRepo, seed });
+
+    const promptLaunchProvenanceAttrMissingRepo = join(root, "prompt-launch-provenance-attr-missing-repo");
+    makeFixtureRound(promptLaunchProvenanceAttrMissingRepo, seed, join(promptLaunchProvenanceAttrMissingRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const promptLaunchProvenanceAttrMissingPath = join(promptLaunchProvenanceAttrMissingRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md");
+    writeFileSync(
+      promptLaunchProvenanceAttrMissingPath,
+      readFileSync(promptLaunchProvenanceAttrMissingPath, "utf8").replace(/(<launch_provenance\b[^>]*?)\slaunch_evidence_path="[^"]+"/, "$1"),
+    );
+    const promptLaunchProvenanceAttrMissing = validateDispatch({ ...parseArgs([]), repo: promptLaunchProvenanceAttrMissingRepo, seed });
+
+    const promptPreserveMissingRepo = join(root, "prompt-preserve-missing-repo");
+    makeFixtureRound(promptPreserveMissingRepo, seed, join(promptPreserveMissingRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const promptPreserveMissingPath = join(promptPreserveMissingRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md");
+    writeFileSync(
+      promptPreserveMissingPath,
+      readFileSync(promptPreserveMissingPath, "utf8").replace(/^<preserve_dirty_paths\b.*\n/m, ""),
+    );
+    const promptPreserveMissing = validateDispatch({ ...parseArgs([]), repo: promptPreserveMissingRepo, seed });
+
+    const promptPreserveWrongRepo = join(root, "prompt-preserve-wrong-repo");
+    makeFixtureRound(promptPreserveWrongRepo, seed, join(promptPreserveWrongRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const promptPreserveWrongPath = join(promptPreserveWrongRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md");
+    writeFileSync(
+      promptPreserveWrongPath,
+      readFileSync(promptPreserveWrongPath, "utf8").replace('dispatcher_owned_seed_state="cli_only"', 'dispatcher_owned_seed_state="direct_edit"'),
+    );
+    const promptPreserveWrong = validateDispatch({ ...parseArgs([]), repo: promptPreserveWrongRepo, seed });
+
+    const legacyPromptRepo = join(root, "legacy-prompt-repo");
+    makeFixtureRound(legacyPromptRepo, seed, join(legacyPromptRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(legacyPromptRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      legacyPromptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md"),
+    );
+    const legacyPrompt = validateDispatch({ ...parseArgs([]), repo: legacyPromptRepo, seed });
+
+    const thinLegacyPromptRepo = join(root, "thin-legacy-prompt-repo");
+    makeFixtureRound(thinLegacyPromptRepo, seed, join(thinLegacyPromptRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(thinLegacyPromptRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      compactPromptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")
+        .replace(/^<child_artifact_contract\b.*\n/m, "Child artifact contract:\n- Final child reply: report path and outcome.\n"),
+    );
+    const thinLegacyPrompt = validateDispatch({ ...parseArgs([]), repo: thinLegacyPromptRepo, seed });
+
+    const compactPromptRepo = join(root, "compact-prompt-repo");
+    makeFixtureRound(compactPromptRepo, seed, join(compactPromptRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(compactPromptRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      compactPromptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md"),
+    );
+    const compactPrompt = validateDispatch({ ...parseArgs([]), repo: compactPromptRepo, seed });
+
+    const compactPromptBadAttrsRepo = join(root, "compact-prompt-bad-attrs-repo");
+    makeFixtureRound(compactPromptBadAttrsRepo, seed, join(compactPromptBadAttrsRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(compactPromptBadAttrsRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      compactPromptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")
+        .replace(' child_writes="report_only"', ""),
+    );
+    const compactPromptBadAttrs = validateDispatch({ ...parseArgs([]), repo: compactPromptBadAttrsRepo, seed });
+    const compactPromptBadAttrsLoop = validateDispatch({ ...parseArgs([]), repo: compactPromptBadAttrsRepo, seed, validationPolicy: "loop" });
+
+    const compactPromptBadRefRepo = join(root, "compact-prompt-bad-ref-repo");
+    makeFixtureRound(compactPromptBadRefRepo, seed, join(compactPromptBadRefRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(compactPromptBadRefRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      compactPromptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")
+        .replace('ref="dispatch-child-artifact.v2"', 'ref="dispatch-child-artifact.v1"'),
+    );
+    const compactPromptBadRef = validateDispatch({ ...parseArgs([]), repo: compactPromptBadRefRepo, seed });
+
+    const compactPromptReportMismatchRepo = join(root, "compact-prompt-report-mismatch-repo");
+    makeFixtureRound(compactPromptReportMismatchRepo, seed, join(compactPromptReportMismatchRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(compactPromptReportMismatchRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      compactPromptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")
+        .replace(/(<child_artifact_contract\b[^>]*\breport_path=")[^"]+/, `$1tmp/dispatch-work/${seed}/round-1/wrong-report.md`),
+    );
+    const compactPromptReportMismatch = validateDispatch({ ...parseArgs([]), repo: compactPromptReportMismatchRepo, seed });
+
+    const wrongAreaRepo = join(root, "wrong-area-repo");
+    makeFixtureRound(wrongAreaRepo, seed, join(wrongAreaRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(wrongAreaRepo, seed, "custom/root");
+    writeFileSync(
+      join(wrongAreaRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\nWrite scope: impl/rust/**\n`,
+    );
+    const wrongArea = validateDispatch({ ...parseArgs([]), repo: wrongAreaRepo, seed });
+
+    const arbitraryAreaRepo = join(root, "arbitrary-area-repo");
+    makeFixtureRound(arbitraryAreaRepo, seed, join(arbitraryAreaRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(arbitraryAreaRepo, seed, "packages/api");
+    writeFileSync(
+      join(arbitraryAreaRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\n<preserve_dirty_paths allowed_write_roots="packages/web tmp/dispatch-work/${seed}/round-1/" />\n`,
+    );
+    const arbitraryArea = validateDispatch({ ...parseArgs([]), repo: arbitraryAreaRepo, seed });
+
+    const topLevelAreaRepo = join(root, "top-level-area-repo");
+    makeFixtureRound(topLevelAreaRepo, seed, join(topLevelAreaRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(topLevelAreaRepo, seed, "services/api");
+    writeFileSync(join(topLevelAreaRepo, "tmp/dispatch-work", seed, "research-1.md"), "Likely files: impl/rust/src/main.rs\n");
+    const topLevelArea = validateDispatch({ ...parseArgs([]), repo: topLevelAreaRepo, seed });
+
+    const quotedAreaRepo = join(root, "quoted-area-repo");
+    makeFixtureRound(quotedAreaRepo, seed, join(quotedAreaRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(quotedAreaRepo, seed, "`impl_v2/rust`");
+    writeFileSync(
+      join(quotedAreaRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\n<preserve_dirty_paths allowed_write_roots="impl_v2/rust tmp/dispatch-work/${seed}/round-1/" />\n`,
+    );
+    const quotedArea = validateDispatch({ ...parseArgs([]), repo: quotedAreaRepo, seed });
+
+    const dirtyGuardMismatchRepo = join(root, "dirty-guard-mismatch-repo");
+    makeFixtureRound(dirtyGuardMismatchRepo, seed, join(dirtyGuardMismatchRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(dirtyGuardMismatchRepo, seed, "impl_v2/rust");
+    mkdirSync(join(dirtyGuardMismatchRepo, "impl/rust/src"), { recursive: true });
+    writeFileSync(join(dirtyGuardMismatchRepo, "impl/rust/src/commands.rs"), "base\n");
+    initGitRepo(dirtyGuardMismatchRepo);
+    writeFileSync(join(dirtyGuardMismatchRepo, "impl/rust/src/commands.rs"), "wrong root\n");
+    const dirtyGuardGatePath = join(dirtyGuardMismatchRepo, "tmp/dispatch-work", seed, "gate.md");
+    writeFileSync(
+      dirtyGuardGatePath,
+      readFileSync(dirtyGuardGatePath, "utf8").replace(
+        "Known dirty paths: none.",
+        "Known dirty paths:\n- `impl_v2/rust/src/commands.rs`: implementation change.",
+      ),
+    );
+    const dirtyGuardMismatch = validateDispatch({ ...parseArgs([]), repo: dirtyGuardMismatchRepo, seed });
+
+    const queueMutationRepo = join(root, "queue-mutation-repo");
+    makeFixtureRound(queueMutationRepo, seed, join(queueMutationRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    initGitRepo(queueMutationRepo);
+    mkdirSync(join(queueMutationRepo, ".seeds"), { recursive: true });
+    writeFileSync(join(queueMutationRepo, ".seeds/issues.jsonl"), "{}\n");
+    const queueMutation = validateDispatch({ ...parseArgs([]), repo: queueMutationRepo, seed });
+
+    const alternateRootRepo = join(root, "alternate-root-repo");
+    const alternateRound = join(alternateRootRepo, "custom-dispatch", seed, "round-1");
+    makeFixtureRound(alternateRootRepo, seed, alternateRound, "pass", "close", true);
+    writeSeedIssue(alternateRootRepo, seed, "custom/root");
+    const alternateRoot = validateDispatch({ ...parseArgs([]), repo: alternateRootRepo, roundPath: alternateRound });
+
+    const tests = [
+      { name: "valid fixture passes", pass: valid.ok, blockers: valid.blockers.length },
+      { name: "missing report summary blocks", pass: !missingSummary.ok && missingSummary.blockers.some((finding) => finding.code === "missing_report_summary"), blockers: missingSummary.blockers.length },
+      { name: "loop policy missing report summary softens", pass: missingSummaryLoop.ok && (missingSummaryLoop.soft_blockers ?? []).some((finding) => finding.code === "missing_report_summary"), blockers: missingSummaryLoop.blockers.length },
+      { name: "summary keys without heading block", pass: !summaryKeysWithoutHeading.ok && summaryKeysWithoutHeading.blockers.some((finding) => finding.code === "missing_report_summary"), blockers: summaryKeysWithoutHeading.blockers.length },
+      { name: "missing report summary key blocks", pass: !missingSummaryKey.ok && missingSummaryKey.blockers.some((finding) => finding.code === "missing_report_summary_key"), blockers: missingSummaryKey.blockers.length },
+      { name: "loop policy missing report summary key softens", pass: missingSummaryKeyLoop.ok && (missingSummaryKeyLoop.soft_blockers ?? []).some((finding) => finding.code === "missing_report_summary_key"), blockers: missingSummaryKeyLoop.blockers.length },
+      { name: "invalid report summary order blocks", pass: !invalidSummaryOrder.ok && invalidSummaryOrder.blockers.some((finding) => finding.code === "invalid_report_summary_order"), blockers: invalidSummaryOrder.blockers.length },
+      { name: "invalid report summary value blocks", pass: !invalidSummaryValue.ok && invalidSummaryValue.blockers.some((finding) => finding.code === "invalid_report_summary_value"), blockers: invalidSummaryValue.blockers.length },
+      { name: "execute done without pass blocks", pass: !badExecute.ok && badExecute.blockers.some((finding) => finding.code === "execute_done_without_pass"), blockers: badExecute.blockers.length },
+      { name: "v1 status contract blocks", pass: !v1.ok && v1.blockers.some((finding) => finding.code === "invalid_status_contract"), blockers: v1.blockers.length },
+      { name: "dirty child without capsule blocks", pass: !dirty.ok && dirty.blockers.some((finding) => finding.code === "missing_failure_capsule"), blockers: dirty.blockers.length },
+      { name: "gate close without evidence blocks", pass: !noEvidence.ok && noEvidence.blockers.some((finding) => finding.code === "gate_missing_evidence_paths"), blockers: noEvidence.blockers.length },
+      { name: "numbered review report passes", pass: numberedReview.ok, blockers: numberedReview.blockers.length },
+      { name: "stale report blocks", pass: !stale.ok && stale.blockers.some((finding) => finding.code === "stale_linked_report"), blockers: stale.blockers.length },
+      { name: "loop policy stale report softens", pass: staleLoop.ok && (staleLoop.soft_blockers ?? []).some((finding) => finding.code === "stale_linked_report"), blockers: staleLoop.blockers.length },
+      { name: "weak liveness handle blocks", pass: !weakLiveness.ok && weakLiveness.blockers.some((finding) => finding.code === "invalid_liveness_handle"), blockers: weakLiveness.blockers.length },
+      { name: "loop policy weak liveness softens", pass: weakLivenessLoop.ok && (weakLivenessLoop.soft_blockers ?? []).some((finding) => finding.code === "invalid_liveness_handle"), blockers: weakLivenessLoop.blockers.length },
+      { name: "launcher/handle mismatch blocks", pass: !mismatchedLauncher.ok && mismatchedLauncher.blockers.some((finding) => finding.code === "launcher_liveness_mismatch"), blockers: mismatchedLauncher.blockers.length },
+      { name: "placeholder spawn handle blocks", pass: !fakeSpawn.ok && fakeSpawn.blockers.some((finding) => finding.code === "invalid_liveness_handle"), blockers: fakeSpawn.blockers.length },
+      { name: "role-name spawn handle blocks", pass: !roleNameSpawn.ok && roleNameSpawn.blockers.some((finding) => finding.code === "self_attested_liveness_handle"), blockers: roleNameSpawn.blockers.length },
+      { name: "session current handle blocks", pass: !sessionCurrent.ok && sessionCurrent.blockers.some((finding) => finding.code === "invalid_liveness_handle"), blockers: sessionCurrent.blockers.length },
+      { name: "missing launch evidence blocks", pass: !missingLaunchEvidence.ok && missingLaunchEvidence.blockers.some((finding) => finding.code === "missing_launch_evidence_path"), blockers: missingLaunchEvidence.blockers.length },
+      { name: "missing launch evidence contract blocks", pass: !missingEvidenceContract.ok && missingEvidenceContract.blockers.some((finding) => finding.code === "invalid_launch_evidence_contract"), blockers: missingEvidenceContract.blockers.length },
+      { name: "missing launch evidence owner blocks", pass: !missingEvidenceOwner.ok && missingEvidenceOwner.blockers.some((finding) => finding.code === "missing_launch_evidence_owner"), blockers: missingEvidenceOwner.blockers.length },
+      { name: "supervisor without launch evidence blocks", pass: !supervisorNoEvidence.ok && supervisorNoEvidence.blockers.some((finding) => finding.code === "missing_launch_evidence_path"), blockers: supervisorNoEvidence.blockers.length },
+      { name: "invalid attempt blocks", pass: !badAttempt.ok && badAttempt.blockers.some((finding) => finding.code === "invalid_attempt"), blockers: badAttempt.blockers.length },
+      { name: "placeholder prompt blocks", pass: !placeholder.ok && placeholder.blockers.some((finding) => finding.code === "placeholder_linked_artifact"), blockers: placeholder.blockers.length },
+      { name: "prompt report mismatch blocks", pass: !promptMismatch.ok && promptMismatch.blockers.some((finding) => finding.code === "prompt_report_path_mismatch"), blockers: promptMismatch.blockers.length },
+      { name: "prompt launch provenance missing blocks", pass: !promptLaunchMissing.ok && promptLaunchMissing.blockers.some((finding) => finding.code === "prompt_missing_launch_evidence_path") && promptLaunchMissing.blockers.some((finding) => finding.code === "prompt_missing_launch_provenance"), blockers: promptLaunchMissing.blockers.length },
+      { name: "prompt io_policy missing attr blocks", pass: !promptIoMissingAttr.ok && promptIoMissingAttr.blockers.some((finding) => finding.code === "prompt_missing_io_path"), blockers: promptIoMissingAttr.blockers.length },
+      { name: "prompt io_policy no polling mismatch blocks", pass: !promptIoNoPollingWrong.ok && promptIoNoPollingWrong.blockers.some((finding) => finding.code === "prompt_io_policy_attr_mismatch"), blockers: promptIoNoPollingWrong.blockers.length },
+      { name: "prompt io_policy no polling missing blocks", pass: !promptIoNoPollingMissing.ok && promptIoNoPollingMissing.blockers.some((finding) => finding.code === "prompt_missing_io_policy_attr"), blockers: promptIoNoPollingMissing.blockers.length },
+      { name: "prompt launch provenance attr missing blocks", pass: !promptLaunchProvenanceAttrMissing.ok && promptLaunchProvenanceAttrMissing.blockers.some((finding) => finding.code === "prompt_missing_launch_provenance_attr"), blockers: promptLaunchProvenanceAttrMissing.blockers.length },
+      { name: "prompt preserve_dirty_paths missing blocks", pass: !promptPreserveMissing.ok && promptPreserveMissing.blockers.some((finding) => finding.code === "prompt_missing_preserve_dirty_paths"), blockers: promptPreserveMissing.blockers.length },
+      { name: "prompt preserve_dirty_paths bad state blocks", pass: !promptPreserveWrong.ok && promptPreserveWrong.blockers.some((finding) => finding.code === "prompt_preserve_dirty_paths_attr_mismatch"), blockers: promptPreserveWrong.blockers.length },
+      { name: "legacy child contract passes", pass: legacyPrompt.ok, blockers: legacyPrompt.blockers.length },
+      { name: "thin legacy child contract blocks", pass: !thinLegacyPrompt.ok && thinLegacyPrompt.blockers.some((finding) => finding.code === "prompt_legacy_child_contract_incomplete"), blockers: thinLegacyPrompt.blockers.length },
+      { name: "compact child contract passes", pass: compactPrompt.ok, blockers: compactPrompt.blockers.length },
+      { name: "compact child contract bad attrs block", pass: !compactPromptBadAttrs.ok && compactPromptBadAttrs.blockers.some((finding) => finding.code === "prompt_child_contract_missing_attr"), blockers: compactPromptBadAttrs.blockers.length },
+      { name: "loop policy compact child contract bad attrs stays hard", pass: !compactPromptBadAttrsLoop.ok && compactPromptBadAttrsLoop.blockers.some((finding) => finding.code === "prompt_child_contract_missing_attr"), blockers: compactPromptBadAttrsLoop.blockers.length },
+      { name: "compact child contract bad ref blocks", pass: !compactPromptBadRef.ok && compactPromptBadRef.blockers.some((finding) => finding.code === "prompt_child_contract_attr_mismatch"), blockers: compactPromptBadRef.blockers.length },
+      { name: "compact child contract report mismatch blocks", pass: !compactPromptReportMismatch.ok && compactPromptReportMismatch.blockers.some((finding) => finding.code === "prompt_report_path_mismatch"), blockers: compactPromptReportMismatch.blockers.length },
+      { name: "seed area mismatch blocks", pass: !wrongArea.ok && wrongArea.blockers.some((finding) => finding.code === "artifact_impl_root_mismatch"), blockers: wrongArea.blockers.length },
+      { name: "arbitrary seed area mismatch blocks", pass: !arbitraryArea.ok && arbitraryArea.blockers.some((finding) => finding.code === "artifact_impl_root_mismatch"), blockers: arbitraryArea.blockers.length },
+      { name: "top-level area mismatch blocks", pass: !topLevelArea.ok && topLevelArea.blockers.some((finding) => finding.code === "artifact_impl_root_mismatch"), blockers: topLevelArea.blockers.length },
+      { name: "quoted area passes", pass: quotedArea.ok, blockers: quotedArea.blockers.length },
+      { name: "dirty guard actual path mismatch blocks", pass: !dirtyGuardMismatch.ok && dirtyGuardMismatch.blockers.some((finding) => finding.code === "gate_dirty_guard_path_mismatch"), blockers: dirtyGuardMismatch.blockers.length },
+      { name: "queue mutation dirty blocks", pass: !queueMutation.ok && queueMutation.blockers.some((finding) => finding.code === "gate_queue_mutation_dirty"), blockers: queueMutation.blockers.length },
+      { name: "round-path alternate root passes", pass: alternateRoot.ok, blockers: alternateRoot.blockers.length },
+    ];
+    const result = { ok: tests.every((test) => test.pass), tests };
+    writeJson(result, pretty);
+    return result.ok ? 0 : 1;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}

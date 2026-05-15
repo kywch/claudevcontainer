@@ -1,0 +1,19 @@
+id: preserve-unknown-fields
+title: Preserve unknown fields during mutation
+sources:
+  - spec/decisions.md#dec-0001-preserve-unknown-fields
+  - spec/behavior.md#b1-flag-record
+operation: updateFlag
+input:
+  record:
+    key: beta
+    enabled: false
+    owner: platform
+  set:
+    enabled: true
+expect:
+  outcome: success
+  observable:
+    key: beta
+    enabled: true
+    owner: platform

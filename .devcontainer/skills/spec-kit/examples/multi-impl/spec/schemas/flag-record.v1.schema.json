@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/flag-record.v1.schema.json",
+  "title": "FlagRecord",
+  "type": "object",
+  "description": "Boundary flag record. Source: spec/behavior.md#b1-flag-record and DEC-0001.",
+  "required": ["key", "enabled"],
+  "properties": {
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Flag key. Source: spec/glossary.md."
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Flag value. Source: spec/behavior.md#b1-flag-record."
+    }
+  },
+  "additionalProperties": true
+}

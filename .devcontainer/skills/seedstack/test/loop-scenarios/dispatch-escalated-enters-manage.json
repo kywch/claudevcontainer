@@ -1,0 +1,39 @@
+{
+  "name": "dispatch-escalated-enters-manage",
+  "seed": "seed-fixture-0009",
+  "state": {
+    "dispatch": {
+      "decision": "escalated",
+      "execute_verdict": "risk",
+      "execute_recommendation": "escalate",
+      "gate_decision": "escalate",
+      "write_round": true
+    },
+    "manage": {
+      "decision": "blocked",
+      "blocked_reason": "fixture_manage_saw_dispatch_escalation"
+    }
+  },
+  "must_emit": [
+    {
+      "event": "reconcile_result",
+      "fields": {
+        "ok": true,
+        "decision": "manage_reconcile",
+        "seed": "seed-fixture-0009"
+      }
+    },
+    {
+      "event": "manage_result",
+      "fields": {
+        "decision": "blocked",
+        "seed": "seed-fixture-0009"
+      }
+    }
+  ],
+  "expected": {
+    "exit_code": 1,
+    "final_state": "blocked",
+    "reason": "fixture_manage_saw_dispatch_escalation"
+  }
+}

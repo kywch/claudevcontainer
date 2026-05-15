@@ -1,0 +1,28 @@
+{
+  "name": "unsafe-continue-after-nonclosed",
+  "seed": "seed-fixture-0013",
+  "state": {
+    "dispatch": {
+      "decision": "blocked"
+    },
+    "manage": {
+      "decision": "continue_other_seeds",
+      "followups_requested": 0,
+      "followups_created": []
+    }
+  },
+  "must_emit": [
+    {
+      "event": "manage_result",
+      "fields": {
+        "decision": "continue_other_seeds",
+        "seed": "seed-fixture-0013"
+      }
+    }
+  ],
+  "expected": {
+    "exit_code": 1,
+    "final_state": "blocked",
+    "reason": "manage_nonclosed_continue_blocked"
+  }
+}

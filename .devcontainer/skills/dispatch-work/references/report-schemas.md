@@ -1,0 +1,279 @@
+# Report Schemas
+
+## Summary Defaults
+
+Parent agents read summaries before artifact bodies.
+
+- report summary: path, verdict/outcome, status lines, headings, blockers
+  count, gate pass/fail summary
+- diff summary: `git diff --stat`, `git diff --name-status`, and scoped hunks
+  only for a named finding or conflict
+- test summary: command, cwd/env, exit code, pass/fail counts, first failing
+  test names, raw log path
+- child-run summary: prompt/log/status/report paths, terminal state, exit
+  status, timeout/signal flags, report freshness/nonempty/schema-valid result,
+  failure capsule path when dirty
+- work-order summary: path, contract, missing/unknown critical fields, and
+  user-approved assumptions
+
+Full artifact bodies are forbidden by default. Allowed parent excerpts are one
+named report section, one failing test block, the first error block, or the
+final 40-80 log lines, each with a stated source path and cap.
+
+## Research
+
+| field | cap | notes |
+| --- | ---: | --- |
+| focus area | - | assigned scope |
+| knowledge scout | - | `knowledge-scout.md` records used or intentionally ignored |
+| governing sources | - | short clause refs |
+| source hints | 12 | `source-hints.json`; advisory only; empty `sources` allowed with note |
+| likely files | 10 | reason/confidence |
+| acceptance criteria | 10 | mark inferred |
+| gate commands | 8 | cwd/env/purpose |
+| risks, non-goals, review focus | - | concise |
+
+No copied docs beyond short clause refs.
+
+## Implement
+
+- outcome: `done` or `failed`
+- changed files: path plus one-line purpose
+- blockers fixed and cleanup/hardening completed, each max 5
+- gates: cwd, env or relevant PATH/tool identity, command, pass/fail, exit
+  code, final 5 relevant lines only
+- note meaningful drift between baseline and final gate outputs, including
+  changed totals, target lists, tool versions, runner identity, or inventory
+- blockers: ranked, max 5
+- risks or follow-ups: max 5
+- no patch text, full logs, or search transcript
+
+## Execute
+
+- verdict: `pass`, `block`, or `risk`
+- Implement report path
+- Review report paths
+- tool preflight path and launch descriptors used
+- source hints: used, ignored, or unavailable; include reason when ignored
+- gates: cwd, env or relevant PATH/tool identity, command,
+  pass/fail/skipped, exit code, reason, final 5 relevant lines only
+- scope evidence: changed-file list or diffstat summary, plus known dirty paths
+- audit evidence: gate timestamps or round timestamp, and runner identity when
+  gate output depends on a rebuilt tool or external inventory
+- prompt-contract attestation for spawned Implement/Review prompts: report
+  path, scope, dirty baseline, `.seeds/**`, command-wrapper rule, review
+  lenses, and peer-finding isolation
+- merged Review queue: blockers fixed, cleanup/hardening completed,
+  cleanup/hardening deferred with rationale and residual risk
+- explain meaningful drift between baseline and final gate outputs, including
+  changed totals, target lists, tool versions, runner identity, or inventory
+- recommendation: `done`, `retry`, or `escalate`; include
+  `follow_up_proposals[]` separately when needed
+- waivers recommended, not granted
+- no patch text, full logs, or search transcript
+
+## Review
+
+- verdict: `pass`, `block`, or `risk`
+- blocking findings only, max 5
+- each finding: severity, file:line, symptom, acceptance criterion violated,
+  minimal fix hint
+- cleanup/hardening opportunities, max 5: file:line or area, improvement, why
+  it matters, suggested minimal change, and whether it is in-scope for this seed
+- pass or risk verdicts include a concise checklist of acceptance criteria or
+  invariants inspected, with source/file refs where useful
+- source hints: used, ignored, or unavailable; include reason when ignored
+- use concrete evidence refs for nontrivial inspected criteria; `path:line` is
+  preferred for code/spec evidence, while command-result summaries need no line
+  refs
+- nonblocking risks, max 3
+- gates inspected, without full output
+- no full diffs, copied docs, search transcript, or low-confidence speculation
+
+## Verify
+
+- verdict: `pass`, `block`, or `risk`
+- checked Execute round and artifact paths
+- source hints: used, ignored, or unavailable; include reason when ignored
+- blocking findings only, max 5
+- each finding: severity, artifact or file:line, symptom, missed criterion,
+  minimal next Execute instruction
+- nonblocking risks, max 3
+- cleanup/hardening deferrals inspected: accept as deferred only when the
+  Execute report records scope/risk rationale; otherwise classify actionable
+  in-scope gaps as `risk` or `block` depending on severity and seed scope
+- use concrete evidence refs for nontrivial inspected criteria; artifact
+  section refs are acceptable when verifying reports rather than code
+- no full diffs, copied docs, search transcript, or low-confidence speculation
+
+## Artifact Validation
+
+Before `gate.md`, Dispatcher validates: required files exist and are nonempty,
+latest-round artifacts are exclusive, verdict values are valid, gates are
+complete, waivers are present or explicitly absent, dirty guard is recorded,
+all accepted dispatch artifact paths are under repo-root-relative
+`tmp/dispatch-work/<work-id>/`, misplaced parent-root artifacts are rejected or
+explicitly ignored, close/escalate terminal outcomes are exclusive, and
+follow-up proposals are nonterminal data for `seedstack` manage mode.
+
+Child run validation also requires: status path exists, launch evidence path
+exists, prompt/log/report paths are repo-root-relative under
+`tmp/dispatch-work/<work-id>/`, report exists, report is nonempty and schema-valid,
+report freshness is consistent with child end status, and any nonzero exit,
+signal, timeout, missing report, stale report, malformed report, or unknown
+terminal state has a bounded `failure-capsule.md`. Missing or invalid status,
+missing launch evidence, missing log path, launcher setup failure, or unknown
+terminal state is also a dirty terminal state; if the child cannot write a
+capsule, the parent writes an infra failure capsule from available metadata. A
+stale heartbeat is dirty only for supervised runs that explicitly produce
+heartbeat artifacts.
+
+Invalid child status includes files whose only terminal content is `0`, `pass`,
+`risk`, `block`, `verdict`, or `state=<x>`. Status must carry
+`contract=child_run_status.v2` or equivalent JSON version plus role, state,
+cwd, started_at, updated_at, launcher, attempt, liveness_handle,
+`parent_launch_id`, `launch_evidence_path`, prompt path, log path, report path,
+and terminal exit/signal/timeout fields when ended. Valid launcher values are
+`spawn_agent`, `claude_agent`, `supervisor`, `codex_cli_supervisor`, and
+`claude_cli_supervisor`; raw `launcher=codex` is invalid for closeable child
+runs. Valid liveness handles are
+`spawn_agent:<id>`, `claude_agent:<id>`, `session:<id>`,
+`supervisor:<run-id>`, `pid:<n>`, or `pgid:<n>` with real non-placeholder IDs.
+Fake/self-attested handles such as
+`spawn_agent:research-code`, `spawn_agent:*local*`,
+`session:codex-current`, or `supervisor:*` without launch evidence are invalid.
+Valid terminal states are `completed`, `failed_exit`, `failed_signal`,
+`failed_timeout`, `infra_failed`, and `unknown_terminal_state`; `starting` and
+`running` are not clean terminal states.
+
+Launch evidence is parent/supervisor-owned JSON, normally
+`tmp/dispatch-work/<work-id>/round-<n>/<role>-launch-evidence.json`, with
+`contract=child_launch_evidence.v1`, `parent_launch_id`, role, attempt,
+launcher, liveness handle, prompt path, log path, status path, report path, and
+status owner/writer. Clean status must reference launch evidence whose
+role/attempt/launcher/handle/paths match the status artifact.
+
+Validator output contract:
+
+```json
+{
+  "contract": "dispatch-work-validation.v1",
+  "ok": true,
+  "blockers": [],
+  "warnings": [],
+  "summary": {
+    "seed": "<work-id>",
+    "selectedRound": 1,
+    "statuses": { "checked": 4, "clean": 4, "dirty": 0 },
+    "reports": { "checked": 4, "execute": 1, "implement": 1, "review": 1, "verify": 1 },
+    "gate": { "present": true, "decision": "close", "acceptedPaths": 4 }
+  }
+}
+```
+
+`seedstack` reconciliation accepts only `dispatch-work-validation.v1`.
+`blockers` and `warnings` are arrays of `{ code, message, path? }`. A local
+done result requires `ok: true`, at least one accepted gate evidence path, and
+zero dirty statuses. Legacy validator output may still use
+`summary.gate.decision: "close"` as an alias for local done; it never authorizes
+queue close.
+
+## Child Run Artifacts
+
+Each child run must produce the artifact set defined by `prompt-contracts.md`.
+Role reports must be written atomically via temp file then rename or with an
+end marker that proves freshness. `failure-capsule.md` is required for dirty
+terminal states.
+
+Optional supervised wrapper artifacts include `runs/<run-id>/`,
+`status.json` with sequence/phase metadata and `heartbeat.jsonl`. They are not
+required for native/platform/simple child runs.
+
+Success report/summary target is <=2k chars. Failure capsule target is <=8k
+chars and may include command, phase, cwd, duration, exit code/signal/timeout,
+last status update or native child state, changed-file summary, first error
+block, final bounded log tail, and artifact paths. Reports may reference child
+logs and status paths, but must not embed raw transcripts.
+
+Clean success requires terminal success status, exit code `0` when available,
+fresh schema-valid report, and no dirty terminal state. Dirty terminal states
+include failed exits, signals, timeouts, missing/stale/malformed reports,
+missing/invalid status, missing logs, launcher setup failures, unknown terminal
+state, and stale heartbeat for heartbeat-enabled supervised runs.
+
+## Gate
+
+`gate.md` records:
+
+- decision: `done`, `retry`, or `escalate` (`close` is accepted only as legacy
+  validator vocabulary for local done)
+- evidence refs: accepted repo-root-relative artifacts and ignored/misplaced
+  artifacts
+- child run validation summary: status/report/capsule validity for latest
+  relevant runs
+- gates: command, cwd/env, pass/fail/skipped, inventory drift, waiver or
+  boundary-deferred status
+- waivers: approver, reason, scope, residual risk, expiry if any
+- boundary_deferred assertions: exact assertion id/signature, failed gate,
+  why out-of-boundary, later owner work order id, carry-forward gate
+- blockers and cleanup/hardening: fixed, waived, deferred with rationale, or
+  escalated
+- dirty guard result and known dirty paths
+- unresolved risk and final rationale
+
+Done and escalate are terminal and exclusive. Follow-up proposals are
+nonterminal data for `seedstack` manage mode.
+
+## Knowledge Capture
+
+`knowledge-capture.md` records:
+
+- existing store count and merge setup check for `.seeds/.gitattributes`
+- marker scan result
+- candidate records considered
+- rejected candidates with recording-gate reason
+- accepted records as self-contained JSON without `evidence`
+- store count before/after and record command outputs
+
+Final Dispatcher reports include a `Knowledge Capture` block with
+`knowledge-capture.md`, accepted IDs, rejected count, marker count, and final
+store count. If no candidate passes, record zero accepted IDs rather than
+omitting the block.
+
+## Completion Barrier
+
+Before reporting local done, Dispatcher must satisfy Gate Decisions in
+`waivers-and-gating.md` and complete this barrier:
+
+1. Validate latest-round artifacts, status/report freshness, verdict
+   enums, gate inventory drift, waivers, boundary-deferred records when used,
+   dirty guard, and terminal exclusivity.
+2. Write `gate.md` and capture path, mtime when available, decision, and
+   completion timestamp.
+3. Confirm no queue mutation was performed by dispatch-work. `.seeds/**`
+   mutations are allowed only for explicit knowledge capture.
+4. Write `tmp/dispatch-work/<work-id>/events/<seq>-done.json` with artifact
+   paths and validation summary before the final Dispatcher report.
+
+If steps fail, write/update `gate.md` with `decision: retry` or
+`decision: escalate`; do not report done. If queue state appears mutated,
+escalate to seedstack/manual audit instead of attempting repair.
+
+Escalation uses the same event rule:
+`tmp/dispatch-work/<work-id>/events/<seq>-escalate.json`, including artifact paths,
+reason, dirty state, and next action. Terminal event files are append-only:
+write a new event for later resolution instead of editing an old terminal
+event.
+
+## Final Dispatcher Report
+
+| area | include |
+| --- | --- |
+| identity | work order id, round ids, timestamps |
+| artifacts | evidence refs, ignored artifacts, terminal event path |
+| results | Research, Execute, Implement, Review, Verify |
+| gate | decision, waivers, unresolved risk, gate evidence/mtime, completion timestamp |
+| queue context | queue id and claim evidence if provided |
+| diff ownership | dispatcher CLI changes, implementation changes, pre-existing dirty paths |
+| knowledge capture | `knowledge-capture.md`, accepted IDs, rejected count, marker count, final store count |
+| routing | prompt-contract attestation, seedstack follow-up proposals |

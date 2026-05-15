@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/flag-store-case.v1.schema.json",
+  "title": "FlagStoreConformanceCase",
+  "type": "object",
+  "required": ["id", "title", "sources", "operation", "input", "expect"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "operation": {
+      "const": "updateFlag"
+    },
+    "input": {
+      "type": "object",
+      "required": ["record", "set"],
+      "properties": {
+        "record": {
+          "$ref": "../schemas/flag-record.v1.schema.json"
+        },
+        "set": {
+          "type": "object",
+          "required": ["enabled"],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "expect": {
+      "type": "object",
+      "required": ["outcome", "observable"],
+      "properties": {
+        "outcome": {
+          "const": "success"
+        },
+        "observable": {
+          "$ref": "../schemas/flag-record.v1.schema.json"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
