@@ -3,28 +3,109 @@
 set -euo pipefail
 
 extension_id="openai.chatgpt"
-target_major="${OPENAI_CHATGPT_REMOTE_MAJOR:-26}"
-target_platform="${OPENAI_CHATGPT_REMOTE_PLATFORM:-linux-x64}"
+expected_version="${OPENAI_CHATGPT_REMOTE_VERSION:-0.4.78}"
+minimum_codex_cli_version="${OPENAI_CHATGPT_MIN_CODEX_CLI_VERSION:-0.130.0}"
 
-if command -v codium >/dev/null 2>&1; then
-  editor_cli="codium"
-elif command -v code >/dev/null 2>&1; then
-  editor_cli="code"
-else
-  echo "[codex-vsix] Skipping: no VS Code-compatible CLI found in container."
-  exit 0
-fi
+extension_roots=(
+  "$HOME/.vscodium-server/extensions"
+  "$HOME/.vscode-server/extensions"
+)
 
-if [ -z "${VSCODE_IPC_HOOK:-}" ] && [ -z "${VSCODE_IPC_HOOK_CLI:-}" ]; then
-  echo "[codex-vsix] Skipping: no attached editor IPC hook found."
-  exit 0
-fi
+find_editor_cli() {
+  if command -v codium >/dev/null 2>&1; then
+    command -v codium
+    return 0
+  fi
+  if command -v code >/dev/null 2>&1; then
+    command -v code
+    return 0
+  fi
 
-current_version="$("$editor_cli" --list-extensions --show-versions 2>/dev/null | awk -F@ -v ext="$extension_id" '$1 == ext { print $2; exit }')"
-if [[ "$current_version" == "$target_major".* ]]; then
-  echo "[codex-vsix] Remote $extension_id already on $current_version."
-  exit 0
-fi
+  find "$HOME/.vscodium-server/bin" "$HOME/.vscode-server/bin" \
+    -path "*/bin/remote-cli/codium" -o \
+    -path "*/bin/remote-cli/code" \
+    2>/dev/null | sort -V | tail -n 1
+}
+
+installed_version_from_disk() {
+  local root package_json
+
+  for root in "${extension_roots[@]}"; do
+    [ -d "$root" ] || continue
+    find "$root" -maxdepth 2 -type f -path "*/package.json" -print
+  done | while IFS= read -r package_json; do
+    node -e '
+      const fs = require("fs");
+      const p = process.argv[1];
+      const pkg = JSON.parse(fs.readFileSync(p, "utf8"));
+      if (pkg.publisher === "openai" && pkg.name === "chatgpt") {
+        console.log(pkg.version);
+      }
+    ' "$package_json" 2>/dev/null || true
+  done | sort -V | tail -n 1
+}
+
+installed_version_from_cli() {
+  local editor_cli="$1"
+
+  if [ -z "$editor_cli" ]; then
+    return 0
+  fi
+
+  "$editor_cli" --list-extensions --show-versions 2>/dev/null |
+    awk -F@ -v ext="$extension_id" '$1 == ext { print $2; exit }'
+}
+
+version_lt() {
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" != "$2" ]
+}
+
+codex_version() {
+  local codex_bin="$1"
+
+  [ -x "$codex_bin" ] || return 0
+  "$codex_bin" --version 2>/dev/null | awk '{ print $2; exit }'
+}
+
+find_cli_codex_binary() {
+  local candidate
+
+  for candidate in \
+    "$HOME/.bun/install/global/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex" \
+    "$HOME/.bun/install/global/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex/codex"
+  do
+    [ -x "$candidate" ] || continue
+    echo "$candidate"
+    return 0
+  done
+}
+
+patch_extension_codex_binary() {
+  local root extension_dir bundled_bin bundled_version cli_bin cli_version
+
+  cli_bin="$(find_cli_codex_binary || true)"
+  [ -n "$cli_bin" ] || return 0
+  cli_version="$(codex_version "$cli_bin" || true)"
+  [ -n "$cli_version" ] || return 0
+  if version_lt "$cli_version" "$minimum_codex_cli_version"; then
+    return 0
+  fi
+
+  for root in "${extension_roots[@]}"; do
+    [ -d "$root" ] || continue
+    for extension_dir in "$root"/openai.chatgpt-*; do
+      [ -d "$extension_dir" ] || continue
+      bundled_bin="$extension_dir/bin/linux-x86_64/codex"
+      [ -e "$bundled_bin" ] || continue
+      bundled_version="$(codex_version "$bundled_bin" || true)"
+      if [ -z "$bundled_version" ] || version_lt "$bundled_version" "$minimum_codex_cli_version"; then
+        cp -f "$cli_bin" "$bundled_bin"
+        chmod 755 "$bundled_bin"
+        echo "[codex-vsix] Patched extension Codex CLI ${bundled_version:-unknown} -> $cli_version."
+      fi
+    done
+  done
+}
 
 find_cached_vsix() {
   local cache_dir
@@ -35,35 +116,63 @@ find_cached_vsix() {
   do
     [ -d "$cache_dir" ] || continue
     find "$cache_dir" -maxdepth 1 -type f \
-      -name "${extension_id}-${target_major}.*-${target_platform}" \
+      \( -name "${extension_id}-${expected_version}*.vsix" \
+         -o -name "${extension_id}-${expected_version}*" \) \
       -print
   done | sort -V | tail -n 1
 }
 
+current_version="$(installed_version_from_disk || true)"
+if [ "$current_version" = "$expected_version" ]; then
+  patch_extension_codex_binary
+  echo "[codex-vsix] Remote $extension_id is $current_version."
+  exit 0
+fi
+
+editor_cli="$(find_editor_cli || true)"
+cli_version="$(installed_version_from_cli "$editor_cli" || true)"
+if [ "$cli_version" = "$expected_version" ]; then
+  echo "[codex-vsix] Remote $extension_id is $cli_version."
+  exit 0
+fi
+
 source_vsix="$(find_cached_vsix || true)"
-if [ -z "$source_vsix" ]; then
-  echo "[codex-vsix] No cached ${target_major}.x VSIX found on the host; keeping ${current_version:-marketplace install}."
+if [ -n "$source_vsix" ] && [ -n "$editor_cli" ]; then
+  tmp_vsix="$(mktemp --suffix=.vsix)"
+  cleanup() {
+    rm -f "$tmp_vsix"
+  }
+  trap cleanup EXIT
+
+  cp "$source_vsix" "$tmp_vsix"
+  echo "[codex-vsix] Installing remote $extension_id from $(basename "$source_vsix")."
+  "$editor_cli" --uninstall-extension "$extension_id" >/dev/null 2>&1 || true
+  "$editor_cli" --install-extension "$tmp_vsix" --force >/dev/null 2>&1 || true
+fi
+
+current_version="$(installed_version_from_disk || true)"
+if [ "$current_version" = "$expected_version" ]; then
+  patch_extension_codex_binary
+  echo "[codex-vsix] Remote $extension_id is now $current_version."
   exit 0
 fi
 
-tmp_vsix="$(mktemp --suffix=.vsix)"
-cleanup() {
-  rm -f "$tmp_vsix"
-}
-trap cleanup EXIT
-
-cp "$source_vsix" "$tmp_vsix"
-
-echo "[codex-vsix] Installing remote $extension_id from $(basename "$source_vsix")."
-"$editor_cli" --uninstall-extension "$extension_id" >/dev/null 2>&1 || true
-if ! "$editor_cli" --install-extension "$tmp_vsix" --force >/dev/null 2>&1; then
-  echo "[codex-vsix] VSIX install failed; leaving the current remote extension state unchanged."
+if [ -z "${VSCODE_IPC_HOOK:-}" ] && [ -z "${VSCODE_IPC_HOOK_CLI:-}" ]; then
+  echo "[codex-vsix] Expected $extension_id $expected_version, found ${current_version:-none}; waiting for editor extension sync."
   exit 0
 fi
 
-installed_version="$("$editor_cli" --list-extensions --show-versions 2>/dev/null | awk -F@ -v ext="$extension_id" '$1 == ext { print $2; exit }')"
-if [[ "$installed_version" == "$target_major".* ]]; then
-  echo "[codex-vsix] Remote $extension_id is now $installed_version."
+if [ -n "$editor_cli" ]; then
+  echo "[codex-vsix] Installing remote $extension_id from the editor marketplace."
+  if ! "$editor_cli" --install-extension "$extension_id" --force; then
+    echo "[codex-vsix] Editor CLI install failed."
+  fi
+fi
+
+current_version="$(installed_version_from_disk || true)"
+if [ "$current_version" = "$expected_version" ]; then
+  patch_extension_codex_binary
+  echo "[codex-vsix] Remote $extension_id is now $current_version."
 else
-  echo "[codex-vsix] Install completed, but the active remote version is ${installed_version:-unknown}."
+  echo "[codex-vsix] Expected $extension_id $expected_version, found ${current_version:-none}."
 fi

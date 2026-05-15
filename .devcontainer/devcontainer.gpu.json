@@ -44,6 +44,8 @@
     "source=${localEnv:HOME}/.gemini,target=/mnt/host-gemini,type=bind,readonly",
     "source=${localEnv:HOME}/.forge,target=/mnt/host-forge,type=bind,readonly",
     "source=${localEnv:HOME}/.ssh,target=/mnt/host-ssh,type=bind,readonly",
+    // Read-only extension sources so postAttach can pin/repair the remote
+    // OpenAI ChatGPT extension from a host-side VSIX when available.
     "source=${localEnv:HOME}/.config/Code/CachedExtensionVSIXs,target=/mnt/host-vscode-vsix-cache,type=bind,readonly",
     "source=${localEnv:HOME}/.config/VSCodium/CachedExtensionVSIXs,target=/mnt/host-vscodium-vsix-cache,type=bind,readonly",
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"

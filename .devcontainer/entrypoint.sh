@@ -200,8 +200,8 @@ import_ssh_dir /mnt/host-ssh "$AGENT_HOME/.ssh"
 remove_devpod_docker_creds() {
   local config_file="$1"
   local tmp_config
-  [ -f "$config_file" ] || return
-  command -v jq >/dev/null 2>&1 || return
+  [ -f "$config_file" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
 
   tmp_config="$(mktemp)"
   if jq '
