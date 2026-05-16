@@ -98,6 +98,7 @@ type Result = {
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SEEDSTACK_DIR = dirname(SCRIPT_DIR);
 const DISPATCH_WORK_VALIDATOR = resolve(SEEDSTACK_DIR, "..", "dispatch-work", "scripts", "validate-dispatch-work.ts");
+const DIRTY_CLASSIFIER = resolve(SCRIPT_DIR, "classify-dirty-state.ts");
 
 const HELP = `check-dispatch-reconcile.ts dispatch_reconcile_check.v1
 
@@ -315,7 +316,7 @@ function runDirty(options: Options): { dirty: DirtyResult; command: CommandRecor
     : join(options.dispatchRoot, options.seed ?? "");
   const argv = [
     "bun",
-    "skills/seedstack/scripts/classify-dirty-state.ts",
+    DIRTY_CLASSIFIER,
     "--repo",
     options.repo,
     "--seed",
@@ -445,6 +446,90 @@ function dirtyStatusBlocker(summary: Record<string, unknown>): Finding | null {
   };
 }
 
+function isQueueMutationBlocker(finding: Finding): boolean {
+  return finding.code === "gate_queue_mutation_dirty";
+}
+
+function pathValue(path: Record<string, unknown>): string {
+  return typeof path.path === "string" ? path.path : "";
+}
+
+function statusValue(path: Record<string, unknown>): string {
+  return typeof path.status === "string" ? path.status : "";
+}
+
+function classificationValue(path: Record<string, unknown>): string {
+  return typeof path.classification === "string" ? path.classification : "";
+}
+
+function isQueuePath(path: string): boolean {
+  return path.startsWith(".seeds/");
+}
+
+function isConflictStatus(status: string): boolean {
+  const code = status.trim();
+  return ["UU", "AA", "DD", "AU", "UA", "DU", "UD"].includes(code) || code.includes("U");
+}
+
+function isDeletedQueuePath(path: Record<string, unknown>): boolean {
+  return isQueuePath(pathValue(path)) && statusValue(path).includes("D");
+}
+
+function normalizedCommitDirty(dirty: DirtyResult): DirtyResult {
+  const paths = (dirty.paths ?? []).map((entry) => {
+    const path = pathValue(entry);
+    if (!isQueuePath(path)) return entry;
+    return {
+      ...entry,
+      classification: "expected_queue_mutation",
+      reason: "Seedstack per_seed commit reconcile allows manager-owned queue mutation",
+    };
+  });
+  const unexpected = paths
+    .filter((entry) => classificationValue(entry) === "unexpected")
+    .map((entry) => pathValue(entry))
+    .filter(Boolean);
+  const hardDirty = paths
+    .filter((entry) => {
+      const status = statusValue(entry);
+      if (isConflictStatus(status) || isDeletedQueuePath(entry)) return true;
+      return classificationValue(entry) === "unexpected";
+    })
+    .map((entry) => pathValue(entry))
+    .filter(Boolean);
+  const softDirty = paths
+    .filter((entry) => classificationValue(entry) === "unexpected" && !hardDirty.includes(pathValue(entry)))
+    .map((entry) => pathValue(entry))
+    .filter(Boolean);
+  const summary: Record<string, unknown> = { ...(dirty.summary ?? {}) };
+  summary.expected_queue_mutation = paths.filter((entry) => classificationValue(entry) === "expected_queue_mutation").length;
+  summary.unexpected = unexpected.length;
+  return {
+    ...dirty,
+    ok: hardDirty.length === 0,
+    summary,
+    paths,
+    unexpected_paths: unexpected,
+    hard_dirty_paths: hardDirty,
+    soft_dirty_paths: softDirty,
+  };
+}
+
+function commitDirtyAllowsValidationQueueMutation(dirty: DirtyResult): boolean {
+  const paths = dirty.paths ?? [];
+  if (paths.length === 0) return false;
+  if (!paths.some((entry) => isQueuePath(pathValue(entry)))) return false;
+  return paths.every((entry) => {
+    const classification = classificationValue(entry);
+    const path = pathValue(entry);
+    return classification === "expected_seed" ||
+      classification === "expected_artifact" ||
+      classification === "preexisting_user" ||
+      classification === "expected_queue_mutation" ||
+      isQueuePath(path);
+  });
+}
+
 function check(options: Options): Result {
   if (!options.seed) throw new Error("--seed required unless --self-test");
 
@@ -490,7 +575,11 @@ function check(options: Options): Result {
     };
   }
 
-  if ((!validation.ok || validationHardBlockers.length > 0) && !loopNonCloseGate) {
+  const validationQueueMutationOnly = options.commitPolicy === "per_seed" &&
+    validationHardBlockers.length > 0 &&
+    validationHardBlockers.every(isQueueMutationBlocker);
+
+  if ((!validation.ok || validationHardBlockers.length > 0) && !loopNonCloseGate && !validationQueueMutationOnly) {
     const decision = validationDecision(validationHardBlockers);
     return {
       contract: "dispatch_reconcile_check.v1",
@@ -550,36 +639,55 @@ function check(options: Options): Result {
     };
   }
 
-  const { dirty, command } = runDirty(options);
+  const dirtyRun = runDirty(options);
+  const dirty = normalizedCommitDirty(dirtyRun.dirty);
+  const command = dirtyRun.command;
   commands.push(command);
   const unexpected = dirty.unexpected_paths ?? [];
   const hardDirty = dirty.hard_dirty_paths ?? [];
   const softDirty = dirty.soft_dirty_paths ?? [];
   const dirtySummary = (dirty.summary ?? {}) as Record<string, unknown>;
+  const queueMutationAccepted = validationQueueMutationOnly && commitDirtyAllowsValidationQueueMutation(dirty);
+  const expectedQueueMutationWarnings = queueMutationAccepted
+    ? validationHardBlockers.map((finding) => ({
+        ...finding,
+        code: "expected_queue_mutation",
+        message: "Seedstack per_seed commit reconcile accepted manager-owned .seeds/** mutation",
+      }))
+    : [];
   const dirtyWarnings = options.allowUnexpectedDirty && unexpected.length > 0
     ? [{ code: "unexpected_dirty_allowed", message: "--allow-unexpected-dirty permitted unexpected paths" }]
     : [];
-  const dirtyBlockers = dirty.ok
+  const effectiveDirtyOk = dirty.ok && (!validationQueueMutationOnly || queueMutationAccepted);
+  const dirtyBlockers = effectiveDirtyOk
     ? []
-    : (hardDirty.length > 0 ? hardDirty : unexpected).map((path) => ({
-        code: hardDirty.includes(path) ? "hard_dirty" : "unexpected_dirty",
-        message: hardDirty.includes(path) ? "dirty classifier reported hard dirty path" : "dirty classifier reported unexpected path",
-        path,
-      }));
-  if (!dirty.ok && dirtyBlockers.length === 0) {
+    : [
+        ...(validationQueueMutationOnly && !queueMutationAccepted
+          ? validationHardBlockers.map((finding) => ({
+              ...finding,
+              message: `${finding.message}; dirty classifier did not confirm only expected .seeds/** queue paths plus expected seed paths`,
+            }))
+          : []),
+        ...(hardDirty.length > 0 ? hardDirty : unexpected).map((path) => ({
+          code: hardDirty.includes(path) ? "hard_dirty" : "unexpected_dirty",
+          message: hardDirty.includes(path) ? "dirty classifier reported hard dirty path" : "dirty classifier reported unexpected path",
+          path,
+        })),
+      ];
+  if (!effectiveDirtyOk && dirtyBlockers.length === 0) {
     dirtyBlockers.push({ code: "dirty_classifier_failed", message: "dirty classifier returned ok=false without path blockers" });
   }
 
   return {
     contract: "dispatch_reconcile_check.v1",
-    ok: dirty.ok,
-    decision: dirty.ok ? "commit_ready" : "blocked_dirty",
+    ok: effectiveDirtyOk,
+    decision: effectiveDirtyOk ? "commit_ready" : "blocked_dirty",
     blockers: dirtyBlockers,
-    warnings: [...baseWarnings, ...dirtyWarnings],
+    warnings: [...baseWarnings, ...expectedQueueMutationWarnings, ...dirtyWarnings],
     seed: options.seed,
     validation: validationPayload(true, validationSummary, [], [], validationSoftBlockers, validationWarnings),
     dirty: {
-      ok: dirty.ok,
+      ok: effectiveDirtyOk,
       summary: dirtySummary,
       unexpected_paths: unexpected,
       hard_dirty_paths: hardDirty,
@@ -661,6 +769,14 @@ function selfTest(pretty: boolean): void {
       warnings: [],
       summary: { seed: "S1", reports: { checked: 4 }, statuses: { checked: 4, clean: 4, dirty: 0 }, gate: { present: true, decision: "close", acceptedPaths: 1 } },
     });
+    const queueMutationFixture = writeFixture("queue-mutation.json", {
+      contract: "dispatch-work-validation.v1",
+      ok: false,
+      blockers: [{ code: "gate_queue_mutation_dirty", message: "dispatch-work must not mutate queue state paths: .seeds/issues.jsonl" }],
+      hard_blockers: [{ code: "gate_queue_mutation_dirty", message: "dispatch-work must not mutate queue state paths: .seeds/issues.jsonl" }],
+      warnings: [],
+      summary: { seed: "S1", reports: { checked: 4 }, statuses: { checked: 4, clean: 4, dirty: 0 }, gate: { present: true, decision: "close", acceptedPaths: 1 } },
+    });
     const retryFixture = writeFixture("retry.json", {
       contract: "dispatch-work-validation.v1",
       ok: true,
@@ -704,6 +820,8 @@ function selfTest(pretty: boolean): void {
     });
     const statusFile = join(dir, "status.txt");
     writeFileSync(statusFile, " M src/unexpected.ts\n");
+    const queueMutationStatusFile = join(dir, "queue-mutation-status.txt");
+    writeFileSync(queueMutationStatusFile, " M .seeds/issues.jsonl\n M src/owned.ts\n");
     const hardDirtyStatusFile = join(dir, "hard-status.txt");
     writeFileSync(hardDirtyStatusFile, "UU src/expected.ts\n");
 
@@ -743,6 +861,19 @@ function selfTest(pretty: boolean): void {
       { name: "empty gate evidence blocks", result: check({ ...base, validationFile: emptyEvidenceFixture }), ok: false, decision: "blocked_missing_artifact" as Decision },
       { name: "dirty summary blocks", result: check({ ...base, validationFile: dirtyOkFixture }), ok: false, decision: "blocked_missing_artifact" as Decision },
       { name: "legacy validator json blocks", result: check({ ...base, validationFile: legacyFixture }), ok: false, decision: "blocked_validation" as Decision },
+      { name: "queue mutation manage blocks", result: check({ ...base, validationFile: queueMutationFixture }), ok: false, decision: "blocked_validation" as Decision },
+      {
+        name: "queue mutation commit ready",
+        result: check({
+          ...base,
+          validationFile: queueMutationFixture,
+          commitPolicy: "per_seed",
+          dirtyStatusFile: queueMutationStatusFile,
+          expectedSeeds: ["src/owned.ts"],
+        }),
+        ok: true,
+        decision: "commit_ready" as Decision,
+      },
       {
         name: "dirty unexpected",
         result: check({
@@ -780,6 +911,15 @@ function selfTest(pretty: boolean): void {
     const dirtyUnexpected = cases.find((item) => item.name === "dirty unexpected")?.result;
     if (dirtyUnexpected?.dirty?.paths?.[0]?.path !== "src/unexpected.ts") {
       throw new Error("dirty unexpected: dirty.paths passthrough missing");
+    }
+    const queueMutationCommitReady = cases.find((item) => item.name === "queue mutation commit ready")?.result;
+    if (!queueMutationCommitReady?.warnings.some((finding) => finding.code === "expected_queue_mutation")) {
+      throw new Error("queue mutation commit ready: missing expected_queue_mutation warning");
+    }
+    if (!queueMutationCommitReady?.dirty?.paths?.some((path) =>
+      path.path === ".seeds/issues.jsonl" && path.classification === "expected_queue_mutation"
+    )) {
+      throw new Error("queue mutation commit ready: queue path was not normalized");
     }
     const dirtyHardExpected = cases.find((item) => item.name === "dirty hard expected")?.result;
     if (!dirtyHardExpected?.blockers.some((finding) => finding.code === "hard_dirty" && finding.path === "src/expected.ts")) {

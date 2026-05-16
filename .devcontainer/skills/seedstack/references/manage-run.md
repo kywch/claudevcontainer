@@ -128,6 +128,9 @@ Dispatch validation is artifact-only. It checks:
 
 - `gate.md` and `dispatcher-report.md` are nonempty under
   `tmp/dispatch-work/<work-id>/`
+- seedstack child result JSON, gate files, dispatcher reports, and reconcile
+  outputs are supervision/gate artifacts; they are not repo edits and are not
+  dispatch child status evidence
 - terminal decision is `close` or `escalate`, not both; follow-up proposals
   are nonterminal `follow_up_proposals[]`, never a third terminal state
 - verdict values are known
@@ -147,6 +150,7 @@ Adoption scan existing work queue
   -> if open seeds exist and no explicit stack decision:
        write adoption summary and ask user how to proceed
   -> initialize stack only after user chooses adopt existing / create new / stop
+  -> after creating seeds, commit the `.seeds/**` queue baseline before auto run
   -> while open seeds remain:
        pick one explicit ready work order id from the adopted selection
        write run-state.json with state=dispatching and in-flight work order id
@@ -170,6 +174,15 @@ reconciled by manage mode or recorded as unreconciled in `run-state.json`
 before stop.
 On resume, use canonical state per above; reconcile any active or unreconciled
 dispatch before selecting another seed.
+
+Seed creation dirties `.seeds/issues.jsonl` and sometimes related queue files.
+The required workflow is: create seeds -> commit queue baseline -> run auto.
+Before first auto dispatch, the supervisor checks `.seeds/**` queue paths after
+scan/adoption and before normal dirty classification, loop-cap checks, or
+dispatch transition. If any queue path is dirty, excluding
+`.seeds/knowledge.jsonl`, it stops with
+`preexisting_queue_dirty_before_auto_run`, includes `queue_dirty_paths`, and
+reports the remedy to commit seed creation/queue baseline first.
 
 At every loop boundary (resume, before dispatch, before manage mutation,
 before commit, and before selecting the next seed), refresh dirty state and

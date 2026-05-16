@@ -364,6 +364,9 @@ function classifyPath(
     if (matchesPrefix(path, prefix)) {
       return { classification: "expected_seed", reason: `matched --expected-seed ${prefix}` };
     }
+    if (matchesPrefix(prefix, path)) {
+      return { classification: "expected_seed", reason: `matched parent of --expected-seed ${prefix}` };
+    }
   }
   return { classification: "unexpected", reason: "no classifier rule matched" };
 }
@@ -450,7 +453,7 @@ function readStatus(options: Options): { text: string; stripPrefix?: string } {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-  const text = execFileSync("git", ["-C", options.repo, "status", "--porcelain=v1", "--", "."], {
+  const text = execFileSync("git", ["-C", options.repo, "status", "--porcelain=v1", "--untracked-files=all", "--", "."], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -578,6 +581,13 @@ function selfTest(pretty: boolean): void {
   assertCase("quoted rename destination arrow", quotedRename, { ok: true, expected_seed: 1 });
   assertPaths("quoted rename destination arrow", quotedRename, ["src/new -> name.ts"]);
   cases.push({ name: "quoted rename destination arrow", result: quotedRename });
+
+  const collapsedUntrackedParent = classifyStatus("?? src/owned-dir\n", {
+    ...base,
+    expectedSeeds: ["src/owned-dir/file.ts"],
+  });
+  assertCase("collapsed untracked parent expected", collapsedUntrackedParent, { ok: true, expected_seed: 1 });
+  cases.push({ name: "collapsed untracked parent expected", result: collapsedUntrackedParent });
 
   printJson(
     {

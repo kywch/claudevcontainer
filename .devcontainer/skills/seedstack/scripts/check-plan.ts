@@ -284,6 +284,8 @@ for (const card of cards) {
   const priority = String(card.priority ?? "").trim();
   if (!/^-?\d+$/.test(priority)) {
     errors.push(`${tempId}: missing or invalid priority`);
+  } else if (Number(priority) !== 1) {
+    errors.push(`${tempId}: priority must be 1; use blocked_by for execution order`);
   }
 
   for (const field of [

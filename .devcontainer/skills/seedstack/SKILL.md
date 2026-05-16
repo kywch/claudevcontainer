@@ -1,6 +1,6 @@
 ---
 name: seedstack
-description: Use for work-order stack planning, queue state, management, or orchestration: decompose work into a small DAG, adopt ready queue work, reconcile graph state after dispatch-work, close queue records, or run the plan -> dispatch-work -> manage loop. Use dispatch-work only for executing one prepared work item.
+description: "Use for work-order stack planning, queue state, management, or orchestration: decompose work into a small DAG, adopt ready queue work, reconcile graph state after dispatch-work, close queue records, or run the plan -> dispatch-work -> manage loop. Use dispatch-work only for executing one prepared work item."
 ---
 
 # Seedstack
@@ -119,6 +119,7 @@ Load `references/manage-run.md` and `references/seed-card-and-artifacts.md`.
 ```text
 adoption scan existing queue (read-only)
   -> ask if open work orders exist and stack choice is unclear
+  -> after seed creation: commit the queue baseline before first auto dispatch
   -> invoke `scripts/seedstack-loop.ts` as the outer supervisor
   -> report the supervisor JSON result and latest events
 ```
@@ -163,6 +164,13 @@ an explicit work order id to dispatch, record the selection rationale in
 `run-state.json`, refresh `run.md`, and stop on escalation, dirty unexpected
 worktree, no-ready deadlock, loop cap, or failed gates.
 
+Before the first `run auto` dispatch, `.seeds/**` queue state must already be a
+clean git baseline. Create seeds, commit `.seeds/issues.jsonl` and any related
+queue files first, then start auto run. If queue paths are dirty before first
+dispatch, excluding `.seeds/knowledge.jsonl`, the supervisor stops with
+`preexisting_queue_dirty_before_auto_run` and reports `queue_dirty_paths` plus
+the remedy to commit the queue baseline first.
+
 ## Agent Roles
 
 | role | owns | may edit |
@@ -201,6 +209,9 @@ agents must be fresh and targeted. Full rules: `references/plan-review.md`.
   implementation.
 - Explicit seed creation creates work order records only. It is not permission to
   execute those seeds.
+- Workflow is: create seeds -> commit queue baseline -> run auto. Do not start
+  first auto dispatch while `.seeds/**` queue files are dirty, except
+  `.seeds/knowledge.jsonl` under the existing dirty-state policy.
 - Do not create work orders without explicit user request. A user request to run the
   stack loop permits manager-created follow-ups within caps; pause for user
   approval above caps or before structural splits.
@@ -259,9 +270,9 @@ agents must be fresh and targeted. Full rules: `references/plan-review.md`.
 - Safety gate (pre-creation): accept or reject only (no adjust). Reject
   routes to User reacts. Works regardless of "just go" mode. Assumption
   check does not rerun at pre-creation.
-- Pre-creation mechanical checks (temp_id uniqueness, seed_slug/priority
-  presence, blocked_by validity, creation order, shared label, no empty
-  acceptance/gates) are scripted. Plan quality checks such as grab-bag
+- Pre-creation mechanical checks (temp_id uniqueness, seed_slug presence,
+  priority equals 1, blocked_by validity, creation order, shared label, no
+  empty acceptance/gates) are scripted. Plan quality checks such as grab-bag
   detection, chunking strategy fit, early-smoke expectations, discovery-seed
   exceptionalism, and upfront-summary format require agent review.
 - Run pre-creation mechanical checks with:

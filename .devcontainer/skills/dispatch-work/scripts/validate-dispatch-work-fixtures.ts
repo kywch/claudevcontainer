@@ -232,8 +232,8 @@ export function compactPromptFixture(seed: string, role: string, promptName: str
     "",
     `<io_policy prompt_path="${roundRel}/${promptName}" log_path="${roundRel}/${logName}" status_path="${roundRel}/${statusName}" launch_evidence_path="${launchEvidencePath}" report_path="${reportPath}" no_parent_transcript_polling="true" />`,
     `<launch_provenance parent_launch_id="${parentLaunchId}" launch_evidence_path="${launchEvidencePath}" status_owner="parent_or_supervisor" />`,
-    `<preserve_dirty_paths dirty_baseline="none" allowed_write_roots="${roundRel}/" dispatcher_owned_seed_state="cli_only" />`,
-    `<child_artifact_contract ref="dispatch-child-artifact.v2" report_path="${reportPath}" status_owner="parent_or_supervisor" child_writes="report_only" no_seed_mutation=".seeds/**" command_wrapper="repo-native" no_parent_transcript_polling="true" preserve_dirty_paths="required" dirty_baseline="fixture-clean" allowed_write_roots="${roundRel}/" dispatcher_owned_seed_state="cli_only" />`,
+    `<preserve_dirty_paths dirty_baseline="none" artifact_write_roots="${roundRel}/" repo_edit_roots="" dispatcher_owned_seed_state="cli_only" />`,
+    `<child_artifact_contract ref="dispatch-child-artifact.v2" report_path="${reportPath}" status_owner="parent_or_supervisor" child_writes="report_only" no_seed_mutation=".seeds/**" command_wrapper="repo-native" no_parent_transcript_polling="true" preserve_dirty_paths="required" dirty_baseline="fixture-clean" artifact_write_roots="${roundRel}/" repo_edit_roots="" dispatcher_owned_seed_state="cli_only" />`,
     "Write report summary first with status, changed_files, tests, blockers, next_action.",
     "",
   ].join("\n");

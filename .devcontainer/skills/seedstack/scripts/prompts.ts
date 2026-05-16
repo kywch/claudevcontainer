@@ -24,9 +24,11 @@ Task:
 - Do not call queue mutation commands (sd close, dependency edits, label edits, or follow-up creation). Seedstack owns seed/queue state.
 - Use repo-native command requirements from AGENTS.md.
 - You are running inside an outer supervised exec (Codex or Claude Code CLI) managed by seedstack.
-- For dispatch-work child agents, use the native agent-spawn tool (spawn_agent for Codex, Agent tool for Claude Code) only if it returns a real child id.
+- For dispatch-work child agents, use the native agent-spawn tool (spawn_agent for Codex, Agent tool for Claude Code) only if it returns a real child id; record launcher=spawn_agent for Codex and launcher=claude_agent for Claude Code Agent tool.
 - If spawn_agent is unavailable or returns no real id, use supervised CLI launch with real PID, PGID, or session id captured before waiting.
 - Never fabricate liveness handles. Do not use placeholders like spawn_agent:fake, spawn_agent:fixture, pid:1, or guessed ids.
+- Valid launcher values are exactly: spawn_agent, claude_agent, supervisor, codex_cli_supervisor, claude_cli_supervisor.
+- Match launcher to liveness_handle: spawn_agent -> spawn_agent:<id>; claude_agent -> claude_agent:<id>; supervisor/codex_cli_supervisor/claude_cli_supervisor -> supervisor:<run-id>, session:<id>, pid:<n>, or pgid:<n>.
 - The JSON result file below is seedstack supervisor output only; it is not child_run_status evidence for dispatch children.
 
 Artifact paths (use exactly, do not invent names):
@@ -35,14 +37,14 @@ Artifact paths (use exactly, do not invent names):
 - Tool preflight: ${toolPreflightPath(seed)}
 - Gate: ${gatePath(seed)}
 - Dispatcher report: ${dispatcherReportPath(seed)}
-- Terminal done artifact: ${terminalEventPath(seed, 1, "close")}
+- Terminal done artifact: ${terminalEventPath(seed, 1, "done")}
 - Terminal escalate: ${terminalEventPath(seed, 1, "escalate")}
 - Research 1: ${researchPaths(seed, 1).report}
 - Research 2: ${researchPaths(seed, 2).report}
 - Knowledge scout: ${knowledgeScoutPaths(seed).report}
 - Events dir: ${eventsDir(seed)}
 - For research 3+, continue the numeric pattern.
-- Done and escalate are mutually exclusive — use seq 001 for whichever applies. The path may contain "close" for legacy validator compatibility; it does not mean queue close.
+- Done and escalate are mutually exclusive — use seq 001 for whichever applies. The gate decision may contain "close" for legacy validator compatibility; it does not mean queue close.
 - Write any unlisted dispatch-work artifacts under ${dispatchRoot(seed)}/.
 - Set decision to exactly one of: closed, blocked, escalated, crashed.
 - Do not write literal enum text such as "decision": "closed|blocked|escalated|crashed"; choose one value.
@@ -60,6 +62,14 @@ Required round-1 artifacts (the dispatch-work validator checks for all of these)
 - Verify status: ${dispatchRoot(seed)}/round-1/verify-1.status
 - gate.md must contain the line: \`decision: close\` (or \`decision: escalate\`) for validator compatibility. Treat \`close\` as local work done; do not mutate queue state.
 
+Required report marker lines for a clean close:
+- Execute Verdict/Recommendation: executor-report.md must contain exact parseable lines \`Verdict: pass\` and \`Recommendation: close\` (or \`Recommendation: done\`).
+- Implement Outcome: done: implement-a1-report.md must contain exact parseable line \`Outcome: done\`.
+- Review Verdict: pass: review-r1-a1.md must contain exact parseable line \`Verdict: pass\`.
+- Verify Verdict: pass: verify-1.md must contain exact parseable line \`Verdict: pass\`.
+- Every role report must start with a Summary block containing these keys in this order: status, changed_files, tests, blockers, next_action.
+- For close/done, report Summary next_action must be close or done.
+
 Each .status file must be a KEY=VALUE text file with these required fields:
   contract=child_run_status.v2
   role=<execute|implement|review|verify>
@@ -69,20 +79,50 @@ Each .status file must be a KEY=VALUE text file with these required fields:
   updated_at=<ISO8601>
   ended_at=<ISO8601>
   exit_code=0
-  launcher=<e.g. claude_agent or claude_cli_supervisor>
+  launcher=<spawn_agent|claude_agent|supervisor|codex_cli_supervisor|claude_cli_supervisor>
   attempt=1
-  liveness_handle=<e.g. claude_agent:id or supervisor:id>
+  liveness_handle=<spawn_agent:id|claude_agent:id|supervisor:id|session:id|pid:n|pgid:n>
+  parent_launch_id=<parent-created launch id matching launch evidence>
   launch_evidence_path=<path to launch-evidence.json for this role>
-  prompt_path=<path to prompt file — this file must exist on disk>
-  log_path=<path to log file — this file must exist on disk>
-  report_path=<path to report file>
+  prompt_path=<path to prompt file — this file must exist on disk and be non-empty>
+  log_path=<path to log file — this file must exist on disk and be non-empty>
+  report_path=<path to report file — this file must exist on disk and be non-empty>
   signal=none
   timeout=false
 
-The prompt and log files referenced in each status MUST physically exist (even if empty).
-Create them as empty files if needed: touch <path>.
+The prompt, log, and report files referenced in each status MUST physically exist and MUST be non-empty.
+Do not satisfy this with touch-only empty files. Write the exact child prompt to prompt_path, bounded child stdout/stderr or launch summary to log_path, and the role report to report_path.
 
-gate.md must include a markdown table with a "path" column listing accepted artifact paths:
+Each launch_evidence_path must physically exist, be non-empty JSON, and match its status exactly:
+{
+  "contract": "child_launch_evidence.v1",
+  "parent_launch_id": "<same as status parent_launch_id>",
+  "role": "<same as status role>",
+  "attempt": "1",
+  "launcher": "<same as status launcher>",
+  "liveness_handle": "<same as status liveness_handle>",
+  "prompt_path": "<same as status prompt_path>",
+  "log_path": "<same as status log_path>",
+  "status_path": "<path to this .status file>",
+  "report_path": "<same as status report_path>",
+  "status_writer": "parent"
+}
+
+Each prompt_path file must include child artifact contract tags that match status paths:
+- \`<io_policy prompt_path="..." log_path="..." status_path="..." launch_evidence_path="..." report_path="..." no_parent_transcript_polling="true" />\`
+- \`<launch_provenance parent_launch_id="..." launch_evidence_path="..." status_owner="parent_or_supervisor" />\`
+- \`<child_artifact_contract ref="dispatch-child-artifact.v2" report_path="..." status_owner="parent_or_supervisor" child_writes="report_only" no_seed_mutation=".seeds/**" command_wrapper="repo-native" no_parent_transcript_polling="true" preserve_dirty_paths="required" dirty_baseline="..." artifact_write_roots="${dispatchRoot(seed)}/round-1/" dispatch_artifact_roots="${dispatchRoot(seed)}/" repo_edit_roots="<repo paths this seed may edit>" seedstack_artifact_roots="<seedstack supervision artifact roots, if any>" gate_artifacts="${gatePath(seed)},${dispatcherReportPath(seed)}" dispatcher_owned_seed_state="cli_only" />\`
+
+Do not use a single mixed write-root catch-all. Keep roots typed:
+- artifact_write_roots / dispatch_artifact_roots: dispatch-work artifacts under tmp/dispatch-work.
+- repo_edit_roots: implementation files/directories the work order may change.
+- seedstack_artifact_roots: seedstack supervision artifacts, not implementation edits.
+- gate_artifacts: gate and dispatcher report files, not child_run_status evidence.
+- dirty_baseline: preexisting dirty paths the child must preserve.
+
+Seedstack result files and gate files are supervision/gate artifacts. They are not repo edits, and they are not dispatch child status evidence.
+
+gate.md must include an Evidence Paths markdown table listing accepted dispatch artifact paths only. Do not put command results, cwd paths, source paths, implementation paths, or seedstack paths in this table:
   ## Evidence Paths
   | path | outcome |
   |------|---------|
@@ -90,6 +130,15 @@ gate.md must include a markdown table with a "path" column listing accepted arti
   | tmp/dispatch-work/${seed}/round-1/implement-a1-report.md | done |
   | tmp/dispatch-work/${seed}/round-1/review-r1-a1.md | pass |
   | tmp/dispatch-work/${seed}/round-1/verify-1.md | pass |
+Put command checks in a separate Gate Results or Gate Checks section. Those command tables are not accepted artifact evidence unless they include an explicit log_artifact_path under tmp/dispatch-work/${seed}/.
+
+gate.md must include a Dirty Guard section with actual implementation paths from \`git status --porcelain=v1 --untracked-files=all\`:
+  ## Dirty Guard
+  - command: \`git status --porcelain=v1 --untracked-files=all\`
+  - implementation path: \`<each dirty path not under .seeds/ and not under tmp/>\`
+  - queue paths: none
+If there are no dirty implementation paths, write \`Known dirty paths: none.\`.
+Do not list placeholder paths. Do not list tmp/dispatch-work paths as implementation paths. Do not mutate .seeds queue paths.
 
 verify report (verify-1.md) must include a summary section with next_action field:
   ## Summary

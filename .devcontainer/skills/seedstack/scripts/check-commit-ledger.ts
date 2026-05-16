@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 type CommitPolicy = "per_seed" | "batch" | "none";
 
@@ -87,6 +88,9 @@ type Options = {
   gitPathsFile?: string;
   gitExistsFile?: string;
 };
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const DIRTY_CLASSIFIER = join(SCRIPT_DIR, "classify-dirty-state.ts");
 
 type Result = {
   contract: "commit_ledger_check.v1";
@@ -353,6 +357,10 @@ function matchesPrefix(path: string, prefix: string): boolean {
   return clean.length > 0 && (path === clean || path.startsWith(`${clean}/`));
 }
 
+function isPerSeedQueuePath(path: string): boolean {
+  return path === ".seeds/issues.jsonl";
+}
+
 function compareUtf8(left: string, right: string): number {
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
@@ -500,7 +508,7 @@ function runDirtyClassifier(
   }
   const argv = [
     "bun",
-    "skills/seedstack/scripts/classify-dirty-state.ts",
+    DIRTY_CLASSIFIER,
     "--repo",
     options.repo,
     "--seed",
@@ -662,13 +670,13 @@ function check(options: Options): Result {
     blockers.push({ code: "dispatch_not_closed_clean", message: `latest_dispatch.status is ${status ?? "missing"}` });
   }
   const expectedPaths = expectedPathPrefixes(runState, options);
-  if (expectedPaths.length === 0) {
-    blockers.push({
-      code: "missing_dirty_state",
-      message: "per_seed committed seed requires dirty_state.paths or --expected-path allowlist",
-    });
-  }
   if (!commit) {
+    if (expectedPaths.length === 0) {
+      blockers.push({
+        code: "missing_dirty_state",
+        message: "per_seed commit-pending seed requires dirty_state.paths or --expected-path allowlist",
+      });
+    }
     if (commitPending === true) {
       const commands: CommandRecord[] = [];
       const dirtyRun = seed
@@ -744,7 +752,7 @@ function check(options: Options): Result {
   const gitExists = fullCommit === normalizeCommit(commit) ? !blockers.some((finding) => finding.code === "missing_git_commit") : true;
   const gitPaths = gitExists ? gitCommitPaths(options, commit) : [];
   const unexpectedCommitPaths = gitPaths.filter(
-    (path) => !expectedPaths.some((prefix) => matchesPrefix(path, prefix)),
+    (path) => !isPerSeedQueuePath(path) && !expectedPaths.some((prefix) => matchesPrefix(path, prefix)),
   );
   for (const path of unexpectedCommitPaths) {
     blockers.push({ code: "unexpected_commit_path", message: "commit touched path outside expected prefixes", path });

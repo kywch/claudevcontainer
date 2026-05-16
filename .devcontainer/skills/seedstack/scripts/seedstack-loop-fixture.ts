@@ -16,6 +16,7 @@ type Scenario = {
   adopted_seeds?: string[];
   commit_policy?: "none" | "per_seed";
   prewrite_stop_after_seed?: boolean | { reason?: string };
+  pre_dirty_queue_paths?: string[];
   create_stop_after_seed_after_ms?: number;
   post_seed_delay_ms?: number;
   prewrite_dispatch_round?: {
@@ -75,6 +76,7 @@ const DEFAULT_SCENARIOS = [
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "per-seed-two-seeds.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "stop-after-seed.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "stop-after-seed-idle-start.json"),
+  join(SEEDSTACK_DIR, "test", "loop-scenarios", "preexisting-queue-dirty-before-auto-run.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "unexpected-dirty-before-next-seed.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "attempt-cap-skip-continues.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "manage-followup-cap.json"),
@@ -190,6 +192,7 @@ function setupRepo(sourceRepo: string, scenario: Scenario): { repo: string; seed
   for (const id of adoptedSeeds) assertSafeId(id, "scenario.adopted_seeds[]");
   const repo = mkdtempSync(join(tmpdir(), `seedstack-loop-${scenario.name}-`));
   symlinkSync(join(sourceRepo, "skills"), join(repo, "skills"), "dir");
+  mkdirSync(join(repo, ".seeds"), { recursive: true });
   writeFileSync(join(repo, ".gitignore"), "node_modules/\n");
   const seedstackDir = join(repo, "tmp", "seedstack", scenario.name);
   mkdirSync(seedstackDir, { recursive: true });
@@ -233,6 +236,12 @@ function setupRepo(sourceRepo: string, scenario: Scenario): { repo: string; seed
       ? scenario.prewrite_stop_after_seed.reason
       : "fixture stop after seed";
     writeFileSync(join(seedstackDir, "stop-after-seed.json"), `${JSON.stringify({ reason }, null, 2)}\n`);
+  }
+  for (const dirtyPath of scenario.pre_dirty_queue_paths ?? []) {
+    if (!dirtyPath.startsWith(".seeds/") || dirtyPath.includes("..")) {
+      throw new Error(`${scenario.name}: pre_dirty_queue_paths entries must be safe .seeds paths`);
+    }
+    writeFileSync(join(repo, dirtyPath), `${JSON.stringify({ dirty: true })}\n`);
   }
   return { repo, seedstackDir, statePath, adoptionPath };
 }

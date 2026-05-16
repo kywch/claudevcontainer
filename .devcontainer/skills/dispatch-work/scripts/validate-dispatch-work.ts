@@ -373,6 +373,8 @@ const LOOP_SOFT_BLOCKERS = new Set([
   "prompt_missing_io_policy_attr",
   "prompt_missing_preserve_dirty_paths",
   "prompt_preserve_dirty_paths_missing_attr",
+  "prompt_child_contract_missing_dirty_baseline",
+  "gate_dirty_guard_missing_actual_paths",
   "missing_launch_evidence_path",
   "missing_launch_evidence_owner",
   "invalid_liveness_handle",
@@ -477,8 +479,8 @@ function validateSeedAreaArtifacts(
   roundFiles: string[],
   add: (level: Level, code: string, message: string, path?: string) => void,
 ) {
-  const area = seed ? seedArea(args.repo, seed) : undefined;
-  if (!area) return;
+  const areas = seed ? seedAreas(args.repo, seed) : [];
+  if (areas.length === 0) return;
   const topLevelDispatchFiles = existsSync(dispatchPath)
     ? readdirSync(dispatchPath, { withFileTypes: true })
       .filter((entry) => entry.isFile() && /\.(md|txt)$/.test(entry.name))
@@ -493,15 +495,23 @@ function validateSeedAreaArtifacts(
   for (const file of files) {
     const raw = readSmallArtifact(file, statSync(file).size);
     if (!raw) continue;
-    const roots = implementationRoots(raw);
-    for (const root of scopedArtifactRoots(raw)) roots.add(root);
-    for (const root of roots) {
+    for (const root of implementationRoots(raw)) {
       if (isDispatchArtifactRoot(args.repo, dispatchPath, root)) continue;
-      if (sameAreaRoot(root, area)) continue;
+      if (matchesAnyImplementationAreaRoot(root, areas)) continue;
       add(
         "blocker",
         "artifact_impl_root_mismatch",
-        `artifact mentions implementation root ${root}, but seed area is ${area}`,
+        `artifact mentions implementation root ${root}, but seed areas are ${areas.join(", ")}`,
+        file,
+      );
+    }
+    for (const root of scopedArtifactRoots(raw)) {
+      if (isDispatchArtifactRoot(args.repo, dispatchPath, root)) continue;
+      if (matchesAnyScopedAreaRoot(root, areas)) continue;
+      add(
+        "blocker",
+        "artifact_impl_root_mismatch",
+        `artifact mentions implementation root ${root}, but seed areas are ${areas.join(", ")}`,
         file,
       );
     }
@@ -514,9 +524,9 @@ function isDispatchArtifactRoot(repo: string, dispatchPath: string, root: string
   return normalizedRoot === dispatchRoot || normalizedRoot.startsWith(`${dispatchRoot}/`);
 }
 
-function seedArea(repo: string, seed: string): string | undefined {
+function seedAreas(repo: string, seed: string): string[] {
   const issuesPath = join(repo, ".seeds", "issues.jsonl");
-  if (!existsSync(issuesPath)) return undefined;
+  if (!existsSync(issuesPath)) return [];
   for (const line of readFileSync(issuesPath, "utf8").split(/\r?\n/)) {
     if (!line.trim()) continue;
     let record: Record<string, unknown>;
@@ -527,55 +537,138 @@ function seedArea(repo: string, seed: string): string | undefined {
     }
     if (record.id !== seed) continue;
     const description = stringValue(record.description);
-    return description ? parseArea(description) : undefined;
+    return description ? parseAreas(description) : [];
   }
-  return undefined;
+  return [];
 }
 
-function parseArea(description: string): string | undefined {
+function parseAreas(description: string): string[] {
   const match = /^\s*area:\s*(.+?)\s*$/m.exec(description);
-  return match ? normalizeArea(match[1]) : undefined;
+  if (!match) return [];
+  return match[1]
+    .split(/[+;,|]/)
+    .map(normalizeArea)
+    .filter(Boolean);
 }
 
 function normalizeArea(value: string): string {
   return value.trim().replace(/^["'`]|["'`]$/g, "").replace(/^\.?\//, "").replace(/\/+$/, "");
 }
 
+function areaAliases(area: string): string[] {
+  const normalized = normalizeArea(area);
+  switch (normalized) {
+    case "impl/go":
+      return ["impl_go/v1"];
+    default:
+      return [];
+  }
+}
+
 function implementationRoots(raw: string): Set<string> {
   const roots = new Set<string>();
+  let referenceOnlyBlock = false;
   for (const line of raw.split(/\r?\n/)) {
+    if (/^\s*(?:source_refs?|target_gates?|gates?|tests?)\s*:/i.test(line)) referenceOnlyBlock = true;
+    else if (/^\S[^:]*:\s*/.test(line)) referenceOnlyBlock = false;
     if (/\.tmp\/seedspec\b/.test(line)) continue;
     if (/\b(old|older|historical|pre-v\d+|forbid|forbids|forbidden|not|avoid|conflict|conflicts)\b/i.test(line)) continue;
     for (const match of line.matchAll(/\b(impl(?:_[A-Za-z0-9.-]+)?\/[A-Za-z0-9._-]+)(?=\/|\b)/g)) {
-      roots.add(normalizeArea(match[1]));
+      const root = normalizeArea(match[1]);
+      if (root === "impl/test") continue;
+      if (referenceOnlyBlock) continue;
+      if (isReferenceOnlyImplementationRoot(line, root)) continue;
+      roots.add(root);
     }
   }
   return roots;
 }
 
+function isReferenceOnlyImplementationRoot(line: string, root: string): boolean {
+  const escaped = escapeRegExp(root);
+  const commandUse = new RegExp(`\\b(?:make\\s+-C|cd)\\s+${escaped}(?:\\s|$)`);
+  if (commandUse.test(line)) return true;
+  if (/^\s*(?:[-*]\s*)?(?:source_refs?|target_gates?|gates?|tests?|command)\s*:/i.test(line)) return true;
+  if (new RegExp(`\\bfrom\\s+\`${escaped}/`).test(line)) return true;
+  if (
+    new RegExp(`^\\s*[-*]\\s*\`${escaped}/`).test(line) &&
+    !/\b(changed_files?|implementation path|allowed_write_roots|edit(?:ed)?|owns?)\b/i.test(line)
+  ) return true;
+  if (
+    new RegExp(`\`${escaped}/`).test(line) &&
+    /\b(states?|handles?|has|guard(?:ed|s)?|documents?|advertises?|at|evidence|credibility)\b/i.test(line) &&
+    !/\b(changed_files?|implementation path|allowed_write_roots|edit(?:ed)?|owns?)\b/i.test(line)
+  ) return true;
+  return false;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function scopedArtifactRoots(raw: string): Set<string> {
   const roots = new Set<string>();
-  for (const match of raw.matchAll(/allowed_write_roots\s*=\s*["']([^"']+)["']/g)) {
-    for (const token of match[1].split(/\s+/)) addScopedRoot(roots, token);
+  let hasRepoEditRoots = false;
+  for (const match of raw.matchAll(/repo_edit_roots\s*=\s*["']([^"']*)["']/g)) {
+    hasRepoEditRoots = true;
+    for (const token of splitRootList(match[1])) addScopedRoot(roots, token);
   }
-  for (const match of raw.matchAll(/(?:own|owns|edit only|write scope)[^`\n]*`([^`]+?)(?:\/\*\*)?`/gi)) {
+  if (!hasRepoEditRoots) {
+    for (const match of raw.matchAll(/allowed_write_roots\s*=\s*["']([^"']+)["']/g)) {
+      for (const token of splitRootList(match[1])) addScopedRoot(roots, token);
+    }
+  }
+  for (const match of raw.matchAll(/(?:\bowns?\b|edit only|write scope)[^`\n]*`([^`]+?)(?:\/\*\*)?`/gi)) {
     addScopedRoot(roots, match[1]);
   }
   return roots;
 }
 
+function splitRootList(value: string): string[] {
+  return value.split(/[;,\s]+/).map((token) => token.trim()).filter(Boolean);
+}
+
 function addScopedRoot(roots: Set<string>, value: string) {
   const normalized = normalizeArea(value.replace(/\/\*\*$/, "").replace(/:\d+(:\d+)?$/, ""));
+  if (/\s/.test(normalized)) return;
   if (!normalized.includes("/")) return;
-  if (!normalized || normalized.startsWith("tmp/dispatch-work") || normalized.startsWith(".seeds")) return;
+  if (!normalized || isNonImplementationRoot(normalized)) return;
   if (/^(repo|root|cwd|none)$/i.test(normalized)) return;
   roots.add(normalized);
+}
+
+function isNonImplementationRoot(root: string): boolean {
+  return (
+    root.startsWith("tmp/dispatch-work") ||
+    root.startsWith("tmp/seedstack") ||
+    root.startsWith(".tmp/seedspec") ||
+    root.startsWith(".seeds")
+  );
+}
+
+function matchesAnyImplementationAreaRoot(root: string, areas: string[]): boolean {
+  return areas.some((area) =>
+    sameAreaRoot(root, area) ||
+    sameAreaRoot(area, root) ||
+    areaAliases(area).some((alias) => sameAreaRoot(root, alias) || sameAreaRoot(alias, root)),
+  );
+}
+
+function matchesAnyScopedAreaRoot(root: string, areas: string[]): boolean {
+  return areas.some((area) =>
+    sameAreaRoot(root, area) ||
+    areaAliases(area).some((alias) => sameAreaRoot(root, alias)),
+  );
 }
 
 function sameAreaRoot(root: string, area: string): boolean {
   const normalizedRoot = normalizeArea(root);
   const normalizedArea = normalizeArea(area);
-  return normalizedRoot === normalizedArea || normalizedRoot.startsWith(`${normalizedArea}/`);
+  return (
+    normalizedRoot === normalizedArea ||
+    normalizedRoot === `${normalizedArea}.md` ||
+    normalizedRoot.startsWith(`${normalizedArea}/`)
+  );
 }
 
 function validateStatus(
@@ -1032,30 +1125,67 @@ function loadGate(args: Args, seed: string, dispatchPath: string): GateRecord | 
 }
 
 function parseGateAcceptedRows(raw: string): GateAcceptedRow[] {
-  const lines = raw.split(/\r?\n/).filter((line) => /^\s*\|.*\|\s*$/.test(line));
-  const headerIndex = lines.findIndex((line) => {
-    const lower = line.toLowerCase();
-    return lower.includes("path");
-  });
-  if (headerIndex < 0 || headerIndex + 1 >= lines.length) return [];
-  const headers = splitTableRow(lines[headerIndex]).map((cell) => cell.toLowerCase().replace(/\s+/g, "_"));
+  const lines = raw.split(/\r?\n/);
   const rows: GateAcceptedRow[] = [];
-  for (const line of lines.slice(headerIndex + 2)) {
-    const cells = splitTableRow(line);
-    if (cells.length < headers.length) continue;
-    const row: Record<string, unknown> = {};
-    headers.forEach((header, index) => {
-      row[header] = cells[index];
-    });
-    const path = stripOptional(stringValue(row.path));
-    if (!path) continue;
-    rows.push({
-      path,
-      outcome: stripOptional(stringValue(row.outcome) ?? stringValue(row.verdict) ?? stringValue(row.verdict_or_outcome)),
-      source: "gate",
-    });
+
+  let inEvidenceSection = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const heading = markdownHeadingTitle(lines[i]);
+    if (heading !== undefined) {
+      inEvidenceSection = /\bevidence\b/i.test(heading) && !/\bnon[-\s]?evidence\b/i.test(heading);
+      continue;
+    }
+    if (!inEvidenceSection || !isMarkdownTableRow(lines[i])) continue;
+
+    const headers = splitTableRow(lines[i]).map(normalizeTableHeader);
+    const pathHeader = gateEvidencePathHeader(headers);
+    if (!pathHeader) continue;
+    if (i + 1 >= lines.length || !isMarkdownTableSeparator(lines[i + 1])) continue;
+
+    let j = i + 2;
+    for (; j < lines.length; j += 1) {
+      if (markdownHeadingTitle(lines[j]) !== undefined || !isMarkdownTableRow(lines[j])) break;
+      const cells = splitTableRow(lines[j]);
+      if (cells.length < headers.length) continue;
+      const row: Record<string, unknown> = {};
+      headers.forEach((header, index) => {
+        row[header] = cells[index];
+      });
+      const path = stripOptional(stringValue(row[pathHeader]));
+      if (!path) continue;
+      rows.push({
+        path,
+        outcome: stripOptional(stringValue(row.outcome) ?? stringValue(row.verdict) ?? stringValue(row.verdict_or_outcome)),
+        source: "gate",
+      });
+    }
+    i = j - 1;
   }
   return rows;
+}
+
+function normalizeTableHeader(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, "_");
+}
+
+function gateEvidencePathHeader(headers: string[]): string | undefined {
+  const explicit = headers.find((header) => ["artifact_path", "evidence_path", "report_path", "log_artifact_path"].includes(header));
+  if (explicit) return explicit;
+  if (headers.includes("command")) return undefined;
+  return headers.includes("path") ? "path" : undefined;
+}
+
+function markdownHeadingTitle(line: string): string | undefined {
+  return /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/.exec(line)?.[1];
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  return /^\s*\|.*\|\s*$/.test(line);
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const cells = splitTableRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
 }
 
 function validateGate(

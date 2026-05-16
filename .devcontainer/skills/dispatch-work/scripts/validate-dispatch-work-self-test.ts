@@ -92,6 +92,88 @@ export function runSelfTest(pretty: boolean): number {
     makeFixtureRound(noEvidenceRepo, seed, join(noEvidenceRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", false);
     const noEvidence = validateDispatch({ ...parseArgs([]), repo: noEvidenceRepo, seed });
 
+    const evidenceThenGateChecksRepo = join(root, "evidence-then-gate-checks-repo");
+    const evidenceThenGateChecksRound = join(evidenceThenGateChecksRepo, "tmp/dispatch-work", seed, "round-1");
+    makeFixtureRound(evidenceThenGateChecksRepo, seed, evidenceThenGateChecksRound, "pass", "close", true);
+    writeFileSync(
+      join(evidenceThenGateChecksRepo, "tmp/dispatch-work", seed, "gate.md"),
+      [
+        `# Gate: ${seed}`,
+        "",
+        "decision: close",
+        "",
+        "## Evidence Paths",
+        "",
+        "| path | outcome |",
+        "| --- | --- |",
+        `| tmp/dispatch-work/${seed}/round-1/executor-report.md | pass |`,
+        `| tmp/dispatch-work/${seed}/round-1/implement-a1-report.md | done |`,
+        `| tmp/dispatch-work/${seed}/round-1/review-r1-a1.md | pass |`,
+        `| tmp/dispatch-work/${seed}/round-1/verify-1.md | pass |`,
+        "",
+        "## Gate Checks",
+        "",
+        "| command | path | result |",
+        "| --- | --- | --- |",
+        "| bun skills/dispatch-work/scripts/validate-dispatch-work.ts --self-test | skills/dispatch-work/scripts/validate-dispatch-work.ts | pass |",
+        "",
+        "## Dirty Guard",
+        "",
+        "Known dirty paths: none.",
+      ].join("\n"),
+    );
+    const evidenceThenGateChecks = validateDispatch({ ...parseArgs([]), repo: evidenceThenGateChecksRepo, seed });
+
+    const nonEvidenceTableRepo = join(root, "non-evidence-table-repo");
+    makeFixtureRound(nonEvidenceTableRepo, seed, join(nonEvidenceTableRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(nonEvidenceTableRepo, "tmp/dispatch-work", seed, "gate.md"),
+      [
+        `# Gate: ${seed}`,
+        "",
+        "decision: close",
+        "",
+        "## Evidence Paths",
+        "| path | outcome |",
+        "| --- | --- |",
+        `| tmp/dispatch-work/${seed}/round-1/executor-report.md | pass |`,
+        `| tmp/dispatch-work/${seed}/round-1/implement-a1-report.md | done |`,
+        `| tmp/dispatch-work/${seed}/round-1/review-r1-a1.md | pass |`,
+        `| tmp/dispatch-work/${seed}/round-1/verify-1.md | pass |`,
+        "",
+        "## Non-Evidence Paths",
+        "| path | outcome |",
+        "| --- | --- |",
+        "| cd spec/conformance/runner && bun test | pass |",
+        "",
+      ].join("\n"),
+    );
+    const nonEvidenceTable = validateDispatch({ ...parseArgs([]), repo: nonEvidenceTableRepo, seed });
+
+    const evidenceAliasRepo = join(root, "evidence-alias-repo");
+    makeFixtureRound(evidenceAliasRepo, seed, join(evidenceAliasRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(evidenceAliasRepo, "tmp/dispatch-work", seed, "gate.md"),
+      [
+        `# Gate: ${seed}`,
+        "",
+        "decision: close",
+        "",
+        "## Evidence",
+        "| artifact path | outcome |",
+        "| --- | --- |",
+        `| tmp/dispatch-work/${seed}/round-1/executor-report.md | pass |`,
+        `| tmp/dispatch-work/${seed}/round-1/implement-a1-report.md | done |`,
+        "",
+        "## Gate Results",
+        "| command | path | outcome |",
+        "| --- | --- | --- |",
+        "| bun test | spec/conformance/runner | pass |",
+        "",
+      ].join("\n"),
+    );
+    const evidenceAlias = validateDispatch({ ...parseArgs([]), repo: evidenceAliasRepo, seed });
+
     const numberedReviewRepo = join(root, "numbered-review-repo");
     makeFixtureRound(numberedReviewRepo, seed, join(numberedReviewRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-1.md");
     const numberedReview = validateDispatch({ ...parseArgs([]), repo: numberedReviewRepo, seed });
@@ -289,9 +371,28 @@ export function runSelfTest(pretty: boolean): number {
     writeSeedIssue(arbitraryAreaRepo, seed, "packages/api");
     writeFileSync(
       join(arbitraryAreaRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
-      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\n<preserve_dirty_paths allowed_write_roots="packages/web tmp/dispatch-work/${seed}/round-1/" />\n`,
+      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\n<preserve_dirty_paths repo_edit_roots="packages/web" artifact_write_roots="tmp/dispatch-work/${seed}/round-1/" />\n`,
     );
     const arbitraryArea = validateDispatch({ ...parseArgs([]), repo: arbitraryAreaRepo, seed });
+
+    const artifactRootsIgnoredRepo = join(root, "artifact-roots-ignored-repo");
+    makeFixtureRound(artifactRootsIgnoredRepo, seed, join(artifactRootsIgnoredRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(artifactRootsIgnoredRepo, seed, "packages/api");
+    writeFileSync(
+      join(artifactRootsIgnoredRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\n<preserve_dirty_paths repo_edit_roots="" artifact_write_roots="tmp/dispatch-work/${seed}/round-1/ tmp/seedstack/run-1/" />\n`,
+    );
+    const artifactRootsIgnored = validateDispatch({ ...parseArgs([]), repo: artifactRootsIgnoredRepo, seed });
+
+    const legacyAllowedRootsRepo = join(root, "legacy-allowed-roots-repo");
+    makeFixtureRound(legacyAllowedRootsRepo, seed, join(legacyAllowedRootsRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(legacyAllowedRootsRepo, seed, "packages/web");
+    writeFileSync(
+      join(legacyAllowedRootsRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      legacyPromptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")
+        + `\n<preserve_dirty_paths allowed_write_roots="packages/web tmp/dispatch-work/${seed}/round-1/" />\n`,
+    );
+    const legacyAllowedRoots = validateDispatch({ ...parseArgs([]), repo: legacyAllowedRootsRepo, seed });
 
     const topLevelAreaRepo = join(root, "top-level-area-repo");
     makeFixtureRound(topLevelAreaRepo, seed, join(topLevelAreaRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
@@ -304,9 +405,45 @@ export function runSelfTest(pretty: boolean): number {
     writeSeedIssue(quotedAreaRepo, seed, "`impl_v2/rust`");
     writeFileSync(
       join(quotedAreaRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
-      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\n<preserve_dirty_paths allowed_write_roots="impl_v2/rust tmp/dispatch-work/${seed}/round-1/" />\n`,
+      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\n<preserve_dirty_paths repo_edit_roots="impl_v2/rust" artifact_write_roots="tmp/dispatch-work/${seed}/round-1/" />\n`,
     );
     const quotedArea = validateDispatch({ ...parseArgs([]), repo: quotedAreaRepo, seed });
+
+    const plusAliasAreaRepo = join(root, "plus-alias-area-repo");
+    makeFixtureRound(plusAliasAreaRepo, seed, join(plusAliasAreaRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(plusAliasAreaRepo, seed, "spec/conformance + impl/go");
+    writeFileSync(
+      join(plusAliasAreaRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\nWrite scope: impl_go/v1/**\n`,
+    );
+    const plusAliasArea = validateDispatch({ ...parseArgs([]), repo: plusAliasAreaRepo, seed });
+
+    const commaAreaRepo = join(root, "comma-area-repo");
+    makeFixtureRound(commaAreaRepo, seed, join(commaAreaRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(commaAreaRepo, seed, "packages/api, impl/rust");
+    writeFileSync(
+      join(commaAreaRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\nWrite scope: impl/rust/**\n`,
+    );
+    const commaArea = validateDispatch({ ...parseArgs([]), repo: commaAreaRepo, seed });
+
+    const commaRootListRepo = join(root, "comma-root-list-repo");
+    makeFixtureRound(commaRootListRepo, seed, join(commaRootListRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(commaRootListRepo, seed, "spec/agent, spec/io, spec/conformance");
+    writeFileSync(
+      join(commaRootListRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\n<child_artifact_contract repo_edit_roots="spec/agent.md,spec/io.md,spec/conformance/README.md,tmp/seedstack/run-1" />\n`,
+    );
+    const commaRootList = validateDispatch({ ...parseArgs([]), repo: commaRootListRepo, seed });
+
+    const semicolonAreaRepo = join(root, "semicolon-area-repo");
+    makeFixtureRound(semicolonAreaRepo, seed, join(semicolonAreaRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(semicolonAreaRepo, seed, "services/api; packages/web");
+    writeFileSync(
+      join(semicolonAreaRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
+      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\n<preserve_dirty_paths repo_edit_roots="packages/web; tmp/seedstack/run-1" artifact_write_roots="tmp/dispatch-work/${seed}/round-1/" />\n`,
+    );
+    const semicolonArea = validateDispatch({ ...parseArgs([]), repo: semicolonAreaRepo, seed });
 
     const dirtyGuardMismatchRepo = join(root, "dirty-guard-mismatch-repo");
     makeFixtureRound(dirtyGuardMismatchRepo, seed, join(dirtyGuardMismatchRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
@@ -351,6 +488,9 @@ export function runSelfTest(pretty: boolean): number {
       { name: "v1 status contract blocks", pass: !v1.ok && v1.blockers.some((finding) => finding.code === "invalid_status_contract"), blockers: v1.blockers.length },
       { name: "dirty child without capsule blocks", pass: !dirty.ok && dirty.blockers.some((finding) => finding.code === "missing_failure_capsule"), blockers: dirty.blockers.length },
       { name: "gate close without evidence blocks", pass: !noEvidence.ok && noEvidence.blockers.some((finding) => finding.code === "gate_missing_evidence_paths"), blockers: noEvidence.blockers.length },
+      { name: "gate checks table paths ignored after evidence table", pass: evidenceThenGateChecks.ok && evidenceThenGateChecks.summary.gate?.acceptedPaths === 4, blockers: evidenceThenGateChecks.blockers.length },
+      { name: "non-evidence path table ignored", pass: nonEvidenceTable.ok && nonEvidenceTable.summary.gate?.acceptedPaths === 4, blockers: nonEvidenceTable.blockers.length },
+      { name: "gate evidence artifact path alias passes", pass: evidenceAlias.ok && evidenceAlias.summary.gate?.acceptedPaths === 2, blockers: evidenceAlias.blockers.length },
       { name: "numbered review report passes", pass: numberedReview.ok, blockers: numberedReview.blockers.length },
       { name: "stale report blocks", pass: !stale.ok && stale.blockers.some((finding) => finding.code === "stale_linked_report"), blockers: stale.blockers.length },
       { name: "loop policy stale report softens", pass: staleLoop.ok && (staleLoop.soft_blockers ?? []).some((finding) => finding.code === "stale_linked_report"), blockers: staleLoop.blockers.length },
@@ -383,8 +523,14 @@ export function runSelfTest(pretty: boolean): number {
       { name: "compact child contract report mismatch blocks", pass: !compactPromptReportMismatch.ok && compactPromptReportMismatch.blockers.some((finding) => finding.code === "prompt_report_path_mismatch"), blockers: compactPromptReportMismatch.blockers.length },
       { name: "seed area mismatch blocks", pass: !wrongArea.ok && wrongArea.blockers.some((finding) => finding.code === "artifact_impl_root_mismatch"), blockers: wrongArea.blockers.length },
       { name: "arbitrary seed area mismatch blocks", pass: !arbitraryArea.ok && arbitraryArea.blockers.some((finding) => finding.code === "artifact_impl_root_mismatch"), blockers: arbitraryArea.blockers.length },
+      { name: "artifact roots ignored for implementation scope", pass: artifactRootsIgnored.ok, blockers: artifactRootsIgnored.blockers.length },
+      { name: "legacy allowed_write_roots compatibility passes", pass: legacyAllowedRoots.ok, blockers: legacyAllowedRoots.blockers.length },
       { name: "top-level area mismatch blocks", pass: !topLevelArea.ok && topLevelArea.blockers.some((finding) => finding.code === "artifact_impl_root_mismatch"), blockers: topLevelArea.blockers.length },
       { name: "quoted area passes", pass: quotedArea.ok, blockers: quotedArea.blockers.length },
+      { name: "plus area alias passes", pass: plusAliasArea.ok, blockers: plusAliasArea.blockers.length },
+      { name: "comma area passes", pass: commaArea.ok, blockers: commaArea.blockers.length },
+      { name: "comma repo_edit_roots list passes", pass: commaRootList.ok, blockers: commaRootList.blockers.length },
+      { name: "semicolon area passes", pass: semicolonArea.ok, blockers: semicolonArea.blockers.length },
       { name: "dirty guard actual path mismatch blocks", pass: !dirtyGuardMismatch.ok && dirtyGuardMismatch.blockers.some((finding) => finding.code === "gate_dirty_guard_path_mismatch"), blockers: dirtyGuardMismatch.blockers.length },
       { name: "queue mutation dirty blocks", pass: !queueMutation.ok && queueMutation.blockers.some((finding) => finding.code === "gate_queue_mutation_dirty"), blockers: queueMutation.blockers.length },
       { name: "round-path alternate root passes", pass: alternateRoot.ok, blockers: alternateRoot.blockers.length },

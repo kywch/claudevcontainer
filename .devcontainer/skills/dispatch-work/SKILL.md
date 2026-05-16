@@ -135,8 +135,21 @@ No role mutates queue state; queue context is read-only.
   requests batch mode.
 - Parent agents must not stream or poll child stdout/stderr into parent
   context. Parent liveness checks are status-only.
-- Every spawned child run must have repo-root-relative prompt, log, status,
-  launch evidence, and report paths under `tmp/dispatch-work/<work-id>/...`.
+- Every spawned round child run (Execute, Implement, Review, or Verify) must
+  have repo-root-relative prompt, log, status, launch evidence, and report paths
+  under `tmp/dispatch-work/<work-id>/...`.
+  Canonical child paths are computed only by
+  `scripts/dispatch-work-paths.ts`; do not hand-derive names or directories.
+- Before launching any round child, Dispatcher/Execute must paste the full
+  5-path
+  `path_manifest` returned by `childRunPaths` into the child prompt:
+  `prompt`, `log`, `status`, `launch_evidence`, and `report`.
+- Child artifact paths must live directly in the dispatch root or the correct
+  `round-<n>/` directory. Do not create child artifact subdirectories named
+  `prompts/`, `children/`, `logs/`, or `launch-evidence/`.
+- Child prompt and launch evidence names use prefix-hyphen form only:
+  `<prefix>-prompt.md` and `<prefix>-launch-evidence.json`. Dotted forms such
+  as `execute.prompt.md` or `execute.launch-evidence.json` are invalid.
 - Child reports are summary-first: `status`, `changed_files`, `tests`,
   `blockers`, and `next_action` near top.
 - Missing, stale, malformed, or empty report; nonzero exit; signal; timeout; or
@@ -179,15 +192,15 @@ Research
   the user explicitly accepts large-scope risk.
 - Terminal outcomes are exclusive: `done` or `escalate`, never both.
 - Nested subagent failure stops by escalation, never done.
-- Report enum values are closed: Implement outcome `done|failed`;
-  Execute/Review/Verify `pass|block|risk`; Execute recommendation and gate
-  decision `done|retry|escalate`.
+- Report enum values are closed: Implement status `done|failed`;
+  Execute/Review/Verify status `pass|block|risk`; Execute `next_action` and
+  gate decision `done|retry|escalate`.
 
 ## Artifact Tree
 
-Canonical paths are computed by `scripts/dispatch-work-paths.ts`. Agents receive
-exact paths via prompt contracts and write to those paths. Do not invent file
-names.
+Canonical paths are computed only by `scripts/dispatch-work-paths.ts`. Agents
+receive exact paths via prompt contracts and write to those paths. Do not invent
+file names, child artifact subdirectories, or dotted prompt/evidence names.
 
 ```xml
 <artifacts root="tmp/dispatch-work/<work-id>">
@@ -198,10 +211,30 @@ names.
   <source_hints path="source-hints.json" />
   <research path="research-<i>.md" prefix="research-<i>" />
   <round n="">
-    <execute report="executor-report.md" prefix="execute" />
-    <implement report="implement-a<m>-report.md" prefix="implement-a<m>" />
-    <review report="review-r<i>-a<m>.md" prefix="review-r<i>-a<m>" />
-    <verify report="verify-<i>.md" prefix="verify-<i>" />
+    <execute prefix="execute"
+      prompt="execute-prompt.md"
+      log="execute.log"
+      status="execute.status"
+      launch_evidence="execute-launch-evidence.json"
+      report="executor-report.md" />
+    <implement prefix="implement-a<m>"
+      prompt="implement-a<m>-prompt.md"
+      log="implement-a<m>.log"
+      status="implement-a<m>.status"
+      launch_evidence="implement-a<m>-launch-evidence.json"
+      report="implement-a<m>-report.md" />
+    <review prefix="review-r<i>-a<m>"
+      prompt="review-r<i>-a<m>-prompt.md"
+      log="review-r<i>-a<m>.log"
+      status="review-r<i>-a<m>.status"
+      launch_evidence="review-r<i>-a<m>-launch-evidence.json"
+      report="review-r<i>-a<m>.md" />
+    <verify prefix="verify-<i>"
+      prompt="verify-<i>-prompt.md"
+      log="verify-<i>.log"
+      status="verify-<i>.status"
+      launch_evidence="verify-<i>-launch-evidence.json"
+      report="verify-<i>.md" />
   </round>
   <knowledge_capture path="knowledge-capture.md" />
   <events root="events/" done="events/<seq>-done.json" escalate="events/<seq>-escalate.json" />

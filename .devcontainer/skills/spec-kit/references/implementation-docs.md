@@ -4,6 +4,21 @@ Use implementation notes to keep implementation work repeatable without turning
 tooling guidance into protocol law. Keep target artifacts under `spec/` so the
 spec kit is self-sufficient.
 
+Spec-kit implementation work defaults to sandbox/reference/conformance work, not
+product code edits. Do not modify current product implementation code unless the
+user explicitly asks for implementation changes.
+
+Use sandbox work under:
+
+```text
+tmp/spec-kit/<slug>/
+```
+
+Sandbox code may validate ambiguous clauses, prototype reference behavior, try a
+conformance runner shape, check target-language portability, or explore schemas,
+models, and fixtures. Sandbox outputs are evidence only until promoted into
+decisions, clauses, schemas, conformance cases, or canonical models.
+
 ## Contract Vs Guidance
 
 Separate roles before choosing filenames:
@@ -106,6 +121,18 @@ Each guide should follow this shape:
 
 Do not duplicate shared protocol rules in every language guide. Link back to
 the shared guide and the normative implementation contract when present.
+
+For active target handoff, include target mapping notes where relevant:
+
+- field names and JSON/TOML/YAML tags
+- pointer vs value, nullable vs non-nullable, or option/result representation
+- omit/serialize-empty policy
+- nil vs empty collection behavior
+- timestamp representation
+- extension-field strategy
+- error type, sentinel, exception, or result policy
+
+These notes explain binding choices; they do not redefine protocol behavior.
 
 For one implementation, `spec/implementation-guide.md` can be enough. Split
 into per-port files only when multiple ports exist or are expected soon.

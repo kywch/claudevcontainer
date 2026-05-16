@@ -383,7 +383,7 @@ function check(options: Options): Result {
     if (scan) {
       if (checkerOk(scan) !== true) add(blockers, "scan_failed", "scan ok true required");
       const health = scanHealth(scan);
-      if (health !== null && health !== "pass") {
+      if (health !== null && health !== "pass" && health !== "unknown") {
         add(blockers, "scan_health_failed", "scan health pass required when health is present", { health });
       }
       if (seed && !scanAdoptedReadyIds(scan).includes(seed)) {
@@ -592,6 +592,7 @@ function selfTest(pretty: boolean): Result {
       paths: [{ path: "src/soft.ts", classification: "unexpected" }],
     });
     const scanPass = write("scan-pass.json", { ok: true, adopted_ready_ids: ["S1"], open_adopted: [] });
+    const scanUnknown = write("scan-unknown.json", { ok: true, health: "unknown", adopted_ready_ids: ["S1"], open_adopted: [] });
     const scanWarning = write("scan-warning.json", { ok: true, health: "warning", adopted_ready_ids: ["S1"], open_adopted: [] });
     const scanDone = write("scan-done.json", { ok: true, adopted_ready_ids: [], open_adopted: [] });
     const scanOpen = write("scan-open.json", { ok: true, adopted_ready_ids: ["S2"], open_adopted: ["S3"] });
@@ -634,6 +635,20 @@ function selfTest(pretty: boolean): Result {
         result: check({ ...base, runState: state("idle"), nextState: "dispatching", seed: "S1" }),
         ok: false,
         decision: "blocked_missing_evidence" as Decision,
+      },
+      {
+        name: "idle dispatch scan health unknown passes",
+        result: check({
+          ...base,
+          runState: state("idle"),
+          nextState: "dispatching",
+          seed: "S1",
+          adoptionCheck: adoptionPass,
+          dirtyResult: dirtyPass,
+          scanFile: scanUnknown,
+        }),
+        ok: true,
+        decision: "transition_ready" as Decision,
       },
       {
         name: "idle dispatch scan health warning blocks",

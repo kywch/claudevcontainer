@@ -84,6 +84,9 @@ wrappers; do not assume aliases or wrappers unavailable in their environment.
   convenience last. No redundant transitive edges.
 - In plan cards, use `blocked_by`. If the persisted CLI/API schema exposes
   `blockedBy`, treat it as the same dependency relation at the boundary.
+- `priority` is an urgency class, not execution order. Use `priority: 1` for
+  every planned card. Use `blocked_by` and the dependency graph to control
+  execution readiness.
 - Keep protocol-visible behavior separate from implementation mechanics.
 - Keep implementation seeds scoped to one language and one boundary.
 - Each behavior seed owns closest verification; do not defer required checks to

@@ -23,6 +23,23 @@ Children write reports, not status/liveness self-attestation. A nonterminal
 `role+attempt` status blocks relaunch until the parent cancels, times out, or
 records a dirty terminal state for that same attempt.
 
+Canonical child paths are computed only by
+`scripts/dispatch-work-paths.ts`. Dispatcher/Execute must call
+`childRunPaths(...)` for each child run and paste the full returned 5-path
+`path_manifest` into the child prompt before launch:
+
+```text
+path_manifest:
+  prompt: tmp/dispatch-work/<work-id>/round-<n>/<prefix>-prompt.md
+  log: tmp/dispatch-work/<work-id>/round-<n>/<prefix>.log
+  status: tmp/dispatch-work/<work-id>/round-<n>/<prefix>.status
+  launch_evidence: tmp/dispatch-work/<work-id>/round-<n>/<prefix>-launch-evidence.json
+  report: tmp/dispatch-work/<work-id>/round-<n>/<role-report>
+```
+
+Do not hand-derive alternate child names. Prompt and launch evidence use
+prefix-hyphen names. Log and status use prefix-dot names.
+
 Required status fields for `spawn_agent` children:
 
 ```text
@@ -73,7 +90,7 @@ resolved.
 
 Raw unsupervised `codex exec` is not a valid launcher for Implement, Review, or
 Verify. It may be used only for an explicitly manual diagnostic outside the
-closeable dispatch contract.
+valid dispatch contract.
 
 ## Spawned Process IO
 
@@ -105,22 +122,35 @@ status. Durable liveness handle means pid/process group, native child/session
 id, or supervisor status sequence. If none can be captured, classify launcher
 setup as a dirty terminal state and write an infra failure capsule.
 
-Spawned prompts must include either the compact `child_artifact_contract` tag or
+Spawned round child prompts must include the full `path_manifest` from
+`childRunPaths(...)` plus either the compact `child_artifact_contract` tag or
 the legacy literal child artifact contract from `prompt-contracts.md`; a bare
 contract id without the required critical-rule attributes is not enough.
 
-Minimum child artifacts (5 per child run, sharing the same prefix from
-`scripts/dispatch-work-paths.ts`; contract details live in
-`prompt-contracts.md`):
+Minimum child artifacts are exactly 5 per child run. All 5 must come from the
+same `childRunPaths(...)` call, share the exact same prefix where prefix applies,
+and live in the same dispatch root or same `round-<n>/` directory:
 
-- `<prefix>-prompt.md`: exact child input
-- `<prefix>.log`: full stdout/stderr on disk only
-- `<prefix>.status`: parent/supervisor-owned liveness and terminal state.
-- `<prefix>-launch-evidence.json`: parent/supervisor-owned launch provenance.
-- role report (name varies by role, see `dispatch-work-paths.ts`): bounded role
-  report written freshly for the child run with a summary-first block near
-  the top containing `status`, `changed_files`, `tests`, `blockers`, and
-  `next_action`
+- `<same-dir>/<prefix>-prompt.md`: exact child input
+- `<same-dir>/<prefix>.log`: full stdout/stderr on disk only
+- `<same-dir>/<prefix>.status`: parent/supervisor-owned liveness and terminal
+  state.
+- `<same-dir>/<prefix>-launch-evidence.json`: parent/supervisor-owned launch
+  provenance.
+- `<same-dir>/<role-report>`: bounded role report written freshly for the child
+  run with a summary-first block near the top containing `status`,
+  `changed_files`, `tests`, `blockers`, and `next_action`
+
+Invalid child artifact paths:
+
+- `round-1/prompts/execute-prompt.md`
+- `round-1/children/execute.status`
+- `round-1/logs/execute.log`
+- `round-1/launch-evidence/execute-launch-evidence.json`
+- `round-1/execute.prompt.md`
+- `round-1/execute.launch-evidence.json`
+- `round-1/execute-prompt.md` paired with `round-2/execute.log`
+- `round-1/execute-prompt.md` paired with `round-1/review-r1-a1.status`
 
 Rich `runs/<run-id>/`, `status.json`, and `heartbeat.jsonl` are optional
 supervisor features. A stale heartbeat only dirties a run that explicitly opted
@@ -226,7 +256,7 @@ inspect that evidence.
 - Do not recommend `pass` unless work context is valid, Implement report exists,
   latest Reviews have no blocking findings or documented waivers, in-scope
   cleanup/hardening opportunities have been fixed or explicitly deferred with
-  rationale, gates passed or have user waivers, and Execute gate recommendation
+  rationale, gates passed or have user waivers, and Execute `next_action`
   exists.
 
 ## Verify Requirements

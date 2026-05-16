@@ -137,8 +137,14 @@ function validateCompactChildArtifactContract(
   } else if (expectedPaths?.reportPath && !sameArtifactPath(reportPath, expectedPaths.reportPath)) {
     add("blocker", "prompt_report_path_mismatch", `child_artifact_contract report_path ${reportPath} does not match status ${expectedPaths.reportPath}`, statusFile);
   }
-  for (const attr of ["dirty_baseline", "allowed_write_roots"]) {
-    if (!attrs[attr]) add("blocker", "prompt_child_contract_missing_attr", `child_artifact_contract missing ${attr}: ${linkedPath}`, statusFile);
+  if (!hasAttr(attrs, "dirty_baseline") || !attrs.dirty_baseline) {
+    add("blocker", "prompt_child_contract_missing_dirty_baseline", `child_artifact_contract missing dirty_baseline: ${linkedPath}`, statusFile);
+  }
+  if (!hasAnyAttr(attrs, ["artifact_write_roots", "dispatch_artifact_roots", "allowed_write_roots"])) {
+    add("blocker", "prompt_child_contract_missing_attr", `child_artifact_contract missing artifact_write_roots: ${linkedPath}`, statusFile);
+  }
+  if (!hasAttr(attrs, "repo_edit_roots") && !hasAttr(attrs, "allowed_write_roots")) {
+    add("blocker", "prompt_child_contract_missing_attr", `child_artifact_contract missing repo_edit_roots: ${linkedPath}`, statusFile);
   }
 }
 
@@ -168,8 +174,14 @@ function validatePromptPreserveDirtyPaths(preserveDirtyPaths: { present: boolean
     add("blocker", "prompt_missing_preserve_dirty_paths", `prompt missing preserve_dirty_paths: ${linkedPath}`, statusFile);
     return;
   }
-  for (const attr of ["dirty_baseline", "allowed_write_roots"]) {
-    if (!preserveDirtyPaths.attrs[attr]) add("blocker", "prompt_preserve_dirty_paths_missing_attr", `preserve_dirty_paths missing ${attr}: ${linkedPath}`, statusFile);
+  if (!hasAttr(preserveDirtyPaths.attrs, "dirty_baseline") || !preserveDirtyPaths.attrs.dirty_baseline) {
+    add("blocker", "prompt_preserve_dirty_paths_missing_attr", `preserve_dirty_paths missing dirty_baseline: ${linkedPath}`, statusFile);
+  }
+  if (!hasAnyAttr(preserveDirtyPaths.attrs, ["artifact_write_roots", "dispatch_artifact_roots", "allowed_write_roots"])) {
+    add("blocker", "prompt_preserve_dirty_paths_missing_attr", `preserve_dirty_paths missing artifact_write_roots: ${linkedPath}`, statusFile);
+  }
+  if (!hasAttr(preserveDirtyPaths.attrs, "repo_edit_roots") && !hasAttr(preserveDirtyPaths.attrs, "allowed_write_roots")) {
+    add("blocker", "prompt_preserve_dirty_paths_missing_attr", `preserve_dirty_paths missing repo_edit_roots: ${linkedPath}`, statusFile);
   }
   const seedState = preserveDirtyPaths.attrs.dispatcher_owned_seed_state;
   if (!seedState) {
@@ -204,6 +216,14 @@ function parseTagAttrs(raw: string): Record<string, string> {
     attrs[match[1]] = match[3];
   }
   return attrs;
+}
+
+function hasAttr(attrs: Record<string, string>, attr: string): boolean {
+  return Object.prototype.hasOwnProperty.call(attrs, attr);
+}
+
+function hasAnyAttr(attrs: Record<string, string>, attrNames: string[]): boolean {
+  return attrNames.some((attr) => hasAttr(attrs, attr));
 }
 
 function requirePromptIoPath(

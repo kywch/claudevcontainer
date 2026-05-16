@@ -115,6 +115,7 @@ review. These checks are automated, not agent-reviewed:
 - every `temp_id` is unique
 - every `blocked_by` reference points to an existing `temp_id`
 - creation order respects `blocked_by` (parents before dependents)
+- every seed card uses `priority: 1`; priority is not used to encode DAG order
 - shared network label present in every seed's labels array
 - no empty acceptance or placeholder gate commands
 - required seed-card fields are present

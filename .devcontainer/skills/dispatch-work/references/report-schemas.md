@@ -4,7 +4,7 @@
 
 Parent agents read summaries before artifact bodies.
 
-- report summary: path, verdict/outcome, status lines, headings, blockers
+- report summary: path, lowercase status lines, headings, blockers
   count, gate pass/fail summary
 - diff summary: `git diff --stat`, `git diff --name-status`, and scoped hunks
   only for a named finding or conflict
@@ -22,6 +22,8 @@ final 40-80 log lines, each with a stated source path and cap.
 
 ## Research
 
+- status: `pass`, `risk`, or `block`
+
 | field | cap | notes |
 | --- | ---: | --- |
 | focus area | - | assigned scope |
@@ -37,9 +39,9 @@ No copied docs beyond short clause refs.
 
 ## Implement
 
-- outcome: `done` or `failed`
+- status: `done` or `failed`
 - changed files: path plus one-line purpose
-- blockers fixed and cleanup/hardening completed, each max 5
+- blockers fixed and cleanup/hardening done, each max 5
 - gates: cwd, env or relevant PATH/tool identity, command, pass/fail, exit
   code, final 5 relevant lines only
 - note meaningful drift between baseline and final gate outputs, including
@@ -50,7 +52,7 @@ No copied docs beyond short clause refs.
 
 ## Execute
 
-- verdict: `pass`, `block`, or `risk`
+- status: `pass`, `block`, or `risk`
 - Implement report path
 - Review report paths
 - tool preflight path and launch descriptors used
@@ -63,24 +65,24 @@ No copied docs beyond short clause refs.
 - prompt-contract attestation for spawned Implement/Review prompts: report
   path, scope, dirty baseline, `.seeds/**`, command-wrapper rule, review
   lenses, and peer-finding isolation
-- merged Review queue: blockers fixed, cleanup/hardening completed,
+- merged Review queue: blockers fixed, cleanup/hardening done,
   cleanup/hardening deferred with rationale and residual risk
 - explain meaningful drift between baseline and final gate outputs, including
   changed totals, target lists, tool versions, runner identity, or inventory
-- recommendation: `done`, `retry`, or `escalate`; include
+- next_action: `done`, `retry`, or `escalate`; include
   `follow_up_proposals[]` separately when needed
 - waivers recommended, not granted
 - no patch text, full logs, or search transcript
 
 ## Review
 
-- verdict: `pass`, `block`, or `risk`
+- status: `pass`, `block`, or `risk`
 - blocking findings only, max 5
 - each finding: severity, file:line, symptom, acceptance criterion violated,
   minimal fix hint
 - cleanup/hardening opportunities, max 5: file:line or area, improvement, why
   it matters, suggested minimal change, and whether it is in-scope for this seed
-- pass or risk verdicts include a concise checklist of acceptance criteria or
+- pass or risk status includes a concise checklist of acceptance criteria or
   invariants inspected, with source/file refs where useful
 - source hints: used, ignored, or unavailable; include reason when ignored
 - use concrete evidence refs for nontrivial inspected criteria; `path:line` is
@@ -92,7 +94,7 @@ No copied docs beyond short clause refs.
 
 ## Verify
 
-- verdict: `pass`, `block`, or `risk`
+- status: `pass`, `block`, or `risk`
 - checked Execute round and artifact paths
 - source hints: used, ignored, or unavailable; include reason when ignored
 - blocking findings only, max 5
@@ -109,12 +111,32 @@ No copied docs beyond short clause refs.
 ## Artifact Validation
 
 Before `gate.md`, Dispatcher validates: required files exist and are nonempty,
-latest-round artifacts are exclusive, verdict values are valid, gates are
-complete, waivers are present or explicitly absent, dirty guard is recorded,
-all accepted dispatch artifact paths are under repo-root-relative
-`tmp/dispatch-work/<work-id>/`, misplaced parent-root artifacts are rejected or
-explicitly ignored, close/escalate terminal outcomes are exclusive, and
-follow-up proposals are nonterminal data for `seedstack` manage mode.
+latest-round artifacts are exclusive, lowercase role-specific status values are
+valid, gate records are present, waivers are present or explicitly absent, dirty guard
+is recorded, and all accepted dispatch artifact paths from the `## Evidence`
+or `## Evidence Paths` table are under repo-root-relative
+`tmp/dispatch-work/<work-id>/`. Gate command/result tables are separate evidence
+about checks run; their command, cwd, source, and implementation path columns are
+not accepted artifact paths. Misplaced parent-root artifacts are rejected or
+explicitly ignored, done/escalate terminal outcomes are exclusive, and follow-up
+proposals are nonterminal data for `seedstack` manage mode. Dispatcher and gate
+outputs use only `done`, `retry`, or `escalate`; `close`, `closed`,
+`completed`, and `complete` are legacy/input words and must not be emitted as
+desired output.
+
+Round child prompt/report path validation requires the `path_manifest` generated
+from `scripts/dispatch-work-paths.ts` before task text. `io_policy`,
+`launch_provenance`, `child_artifact_contract`, and task prose path references
+must match manifest values byte-for-byte. Derived, shortened, renamed, or
+relocated dispatch paths are invalid. `artifact_write_roots` and
+`repo_edit_roots` are validated separately: `child_writes=report_only` allows
+only assigned dispatch report writes under `artifact_write_roots`; Implement may
+edit repo files only under `repo_edit_roots`.
+Root lists accept whitespace or semicolon separators. Dispatch artifacts
+(`tmp/dispatch-work/**`), seedstack artifacts (`tmp/seedstack/**`), and
+`.seeds/**` are excluded from implementation-root checks. Legacy
+`allowed_write_roots` remains accepted for old artifacts, but typed
+`repo_edit_roots` wins when present.
 
 Child run validation also requires: status path exists, launch evidence path
 exists, prompt/log/report paths are repo-root-relative under
@@ -135,7 +157,7 @@ cwd, started_at, updated_at, launcher, attempt, liveness_handle,
 `parent_launch_id`, `launch_evidence_path`, prompt path, log path, report path,
 and terminal exit/signal/timeout fields when ended. Valid launcher values are
 `spawn_agent`, `claude_agent`, `supervisor`, `codex_cli_supervisor`, and
-`claude_cli_supervisor`; raw `launcher=codex` is invalid for closeable child
+`claude_cli_supervisor`; raw `launcher=codex` is invalid for valid child
 runs. Valid liveness handles are
 `spawn_agent:<id>`, `claude_agent:<id>`, `session:<id>`,
 `supervisor:<run-id>`, `pid:<n>`, or `pgid:<n>` with real non-placeholder IDs.
@@ -146,12 +168,17 @@ Valid terminal states are `completed`, `failed_exit`, `failed_signal`,
 `failed_timeout`, `infra_failed`, and `unknown_terminal_state`; `starting` and
 `running` are not clean terminal states.
 
-Launch evidence is parent/supervisor-owned JSON, normally
-`tmp/dispatch-work/<work-id>/round-<n>/<role>-launch-evidence.json`, with
-`contract=child_launch_evidence.v1`, `parent_launch_id`, role, attempt,
-launcher, liveness handle, prompt path, log path, status path, report path, and
-status owner/writer. Clean status must reference launch evidence whose
-role/attempt/launcher/handle/paths match the status artifact.
+Launch evidence is parent/supervisor-owned JSON at the exact prefix-based path
+from `childRunPaths(...)`:
+`tmp/dispatch-work/<work-id>/round-<n>/<prefix>-launch-evidence.json`. Examples
+include `execute-launch-evidence.json`, `implement-a1-launch-evidence.json`,
+`review-r1-a1-launch-evidence.json`, and `verify-1-launch-evidence.json`. Do
+not use role-only names, dotted names, or `launch-evidence/` subdirectories.
+Launch evidence carries `contract=child_launch_evidence.v1`,
+`parent_launch_id`, role, attempt, launcher, liveness handle, prompt path, log
+path, status path, report path, and status owner/writer. Clean status must
+reference launch evidence whose role/attempt/launcher/handle/paths match the
+status artifact.
 
 Validator output contract:
 
@@ -166,7 +193,7 @@ Validator output contract:
     "selectedRound": 1,
     "statuses": { "checked": 4, "clean": 4, "dirty": 0 },
     "reports": { "checked": 4, "execute": 1, "implement": 1, "review": 1, "verify": 1 },
-    "gate": { "present": true, "decision": "close", "acceptedPaths": 4 }
+    "gate": { "present": true, "decision": "done", "acceptedPaths": 4 }
   }
 }
 ```
@@ -176,7 +203,7 @@ Validator output contract:
 done result requires `ok: true`, at least one accepted gate evidence path, and
 zero dirty statuses. Legacy validator output may still use
 `summary.gate.decision: "close"` as an alias for local done; it never authorizes
-queue close.
+queue close and must not be re-emitted by Dispatcher or gate reports.
 
 ## Child Run Artifacts
 
@@ -184,6 +211,12 @@ Each child run must produce the artifact set defined by `prompt-contracts.md`.
 Role reports must be written atomically via temp file then rename or with an
 end marker that proves freshness. `failure-capsule.md` is required for dirty
 terminal states.
+
+Child report bytes start with exactly one `## Summary` block. No prose,
+frontmatter, title, metadata, or blank intro may precede it, and no second
+`## Summary` may appear before detailed sections. Summary markers are lowercase:
+`status`, `changed_files`, `tests`, `blockers`, and `next_action`. Uppercase
+`Verdict`, `Outcome`, or `Recommendation` are invalid as desired output labels.
 
 Optional supervised wrapper artifacts include `runs/<run-id>/`,
 `status.json` with sequence/phase metadata and `heartbeat.jsonl`. They are not
@@ -206,7 +239,8 @@ state, and stale heartbeat for heartbeat-enabled supervised runs.
 `gate.md` records:
 
 - decision: `done`, `retry`, or `escalate` (`close` is accepted only as legacy
-  validator vocabulary for local done)
+  validator input vocabulary for local done; do not output `close`, `closed`,
+  `completed`, or `complete`)
 - evidence refs: accepted repo-root-relative artifacts and ignored/misplaced
   artifacts
 - child run validation summary: status/report/capsule validity for latest
@@ -243,11 +277,12 @@ omitting the block.
 ## Completion Barrier
 
 Before reporting local done, Dispatcher must satisfy Gate Decisions in
-`waivers-and-gating.md` and complete this barrier:
+`waivers-and-gating.md` and this barrier:
 
-1. Validate latest-round artifacts, status/report freshness, verdict
-   enums, gate inventory drift, waivers, boundary-deferred records when used,
-   dirty guard, and terminal exclusivity.
+1. Validate latest-round artifacts, status/report freshness, role-specific
+   enums, path_manifest byte-for-byte path matches, artifact_write_roots vs
+   repo_edit_roots, gate inventory drift, waivers, boundary-deferred records
+   when used, dirty guard, and terminal exclusivity.
 2. Write `gate.md` and capture path, mtime when available, decision, and
    completion timestamp.
 3. Confirm no queue mutation was performed by dispatch-work. `.seeds/**`

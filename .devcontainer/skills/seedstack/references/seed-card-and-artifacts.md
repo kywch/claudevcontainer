@@ -9,7 +9,7 @@ temp_id: N1
 seed_slug: plan-only-human-handle
 title: concise imperative
 labels: [net-slug, impl, storage]
-priority: 0
+priority: 1
 blocked_by: [N0]
 area: spec/io | impl/ts | storage | docs | ...
 source_refs:
@@ -27,6 +27,14 @@ estimated_loc: 200-400
 dispatch_notes:
   - read first, hard rules, likely files, risk
 ```
+
+## Priority Semantics
+
+`priority` is an urgency class, not an execution-order field. Planned seed
+cards must use `priority: 1`. Use `blocked_by` dependencies and the dependency
+graph to express execution constraints. Creation order is only topological
+record creation order. Do not encode DAG order by assigning staggered
+priorities.
 
 ## Plan Artifact
 

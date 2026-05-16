@@ -406,6 +406,57 @@ function unexpectedPaths(result: JsonObject): string[] {
     .map((item) => item.path);
 }
 
+function queueDirtyPathsFromStatus(statusText: string): string[] {
+  const paths = new Set<string>();
+  for (const rawLine of statusText.split(/\r?\n/)) {
+    if (!rawLine || rawLine.length < 4 || rawLine[2] !== " ") continue;
+    const pathPart = rawLine.slice(3);
+    const candidates = pathPart.includes(" -> ") ? pathPart.split(" -> ") : [pathPart];
+    for (const candidate of candidates) {
+      const path = candidate.replace(/^"|"$/g, "").replace(/\\/g, "/");
+      if (path.startsWith(".seeds/") && path !== ".seeds/knowledge.jsonl") paths.add(path);
+    }
+  }
+  return [...paths].sort();
+}
+
+function queueDirtyPaths(): string[] {
+  const proc = spawnSync("git", ["status", "--porcelain=v1", "--untracked-files=all", "--", ".seeds"], {
+    cwd: optionsGlobal.repo,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  });
+  if (proc.status !== 0) {
+    throw new Error(`queue_dirty_preflight_git_status_failed: ${(proc.stderr || "").trim() || "git status failed"}`);
+  }
+  return queueDirtyPathsFromStatus(proc.stdout);
+}
+
+function beforeFirstDispatch(runState: JsonObject): boolean {
+  if ((numberField(runState.loop_iteration) ?? 0) > 0) return false;
+  const attempts = isObject(runState.dispatch_attempts) ? Object.keys(runState.dispatch_attempts).length : 0;
+  if (attempts > 0) return false;
+  const latest = isObject(runState.latest_dispatch) ? runState.latest_dispatch : {};
+  return Object.keys(latest).length === 0;
+}
+
+function stopOnPreexistingQueueDirtyBeforeAutoRun(seedstackDir: string, iteration: number, runState: JsonObject): void {
+  if (optionsGlobal.mode !== "auto" || !beforeFirstDispatch(runState)) return;
+  const dirtyPaths = queueDirtyPaths();
+  emit(seedstackDir, "queue_baseline_preflight", {
+    ok: dirtyPaths.length === 0,
+    queue_dirty_paths: dirtyPaths,
+    excluded_paths: [".seeds/knowledge.jsonl"],
+    remedy: "commit seed creation/queue baseline first",
+  });
+  if (dirtyPaths.length > 0) {
+    stop(seedstackDir, iteration, "blocked", "preexisting_queue_dirty_before_auto_run", {
+      queue_dirty_paths: dirtyPaths,
+      remedy: "commit seed creation/queue baseline first",
+    });
+  }
+}
+
 function stopOnUnexpectedDirty(seedstackDir: string, iteration: number, seed: string, dirty: JsonObject, reason: string): void {
   const unexpected = unexpectedPaths(dirty);
   if (unexpected.length > 0) {
@@ -856,7 +907,7 @@ function stagedPaths(): string[] {
 }
 
 function commitCandidatePaths(dirty: JsonObject): string[] {
-  const allowed = new Set(["dispatcher_owned", "expected_seed"]);
+  const allowed = new Set(["dispatcher_owned", "expected_queue_mutation", "expected_seed"]);
   return [...new Set(pathEntries(dirty.paths)
     .filter((item) => allowed.has(item.classification))
     .map((item) => item.path)
@@ -1759,6 +1810,8 @@ async function runLoop(): Promise<never> {
       finalEvent(seedstackDir, true, "done");
     }
 
+    stopOnPreexistingQueueDirtyBeforeAutoRun(seedstackDir, iteration, runState);
+
     const dirty = runJson(seedstackDir, iteration, "dirty", checkerPath("classify-dirty-state.ts"), [
       "--repo",
       optionsGlobal.repo,
@@ -1934,6 +1987,22 @@ async function selfTest(pretty: boolean): Promise<never> {
   } catch (error) {
     assertSelfTest(String((error as Error).message).includes("invalid_run_state"), "invalid run-state error");
   }
+  assertSelfTest(beforeFirstDispatch({ state: "idle" }), "empty idle run-state is before first dispatch");
+  assertSelfTest(!beforeFirstDispatch({ state: "idle", loop_iteration: 1 }), "loop iteration marks dispatch started");
+  assertSelfTest(!beforeFirstDispatch({ state: "idle", dispatch_attempts: { S1: 1 } }), "dispatch attempt marks dispatch started");
+  assertSelfTest(!beforeFirstDispatch({ state: "idle", latest_dispatch: { seed_id: "S1" } }), "latest dispatch marks dispatch started");
+  const queueDirty = queueDirtyPathsFromStatus([
+    " M .seeds/issues.jsonl",
+    "?? .seeds/knowledge.jsonl",
+    " M .seeds/deps.jsonl",
+    "R  .seeds/issues.jsonl -> .seeds/knowledge.jsonl",
+    " M src/app.ts",
+    "",
+  ].join("\n"));
+  assertSelfTest(
+    queueDirty.length === 2 && queueDirty.includes(".seeds/issues.jsonl") && queueDirty.includes(".seeds/deps.jsonl"),
+    "queue dirty preflight excludes knowledge and includes queue paths",
+  );
   await runChildTimeoutSelfTest(assertSelfTest);
   const dispatchPrompt = buildDispatchPrompt("/repo", "seed-test", "/result.json");
   assertSelfTest(dispatchPrompt.includes("outer supervised exec (Codex or Claude Code CLI) managed by seedstack"), "dispatch prompt explains outer supervision");
@@ -1987,6 +2056,7 @@ async function selfTest(pretty: boolean): Promise<never> {
       "child_timeout_watchdog",
       "child_total_timeout",
       "invalid_run_state",
+      "preexisting_queue_dirty_before_auto_run",
       "child_result_contract",
       "child_launch_provenance",
       "dispatch_prompt_launch_provenance",
