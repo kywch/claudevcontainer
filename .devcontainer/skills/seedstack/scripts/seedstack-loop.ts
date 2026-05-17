@@ -158,6 +158,7 @@ Args:
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SEEDSTACK_DIR = dirname(SCRIPT_DIR);
+const WORKSPACE_ROOT = resolve(SCRIPT_DIR, "../../../..");
 const DISPATCH_SEED_DIR = resolve(SEEDSTACK_DIR, "..", "dispatch-work");
 const KNOWLEDGE_STORE_SCRIPT = "/workspace/.devcontainer/skills/capture-knowledge/knowledge-store.ts";
 const KNOWLEDGE_RECORD_TYPES = new Set(["convention", "pattern", "failure", "decision", "reference", "guide"]);
@@ -3244,6 +3245,344 @@ else if (command === "close") {
   }
 }
 
+function writeSupervisorFixtureCodex(path: string, sourceRepo: string): void {
+  writeFileSync(
+    path,
+    `#!/usr/bin/env bun
+import { mkdirSync, appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { makeFixtureRound } from ${JSON.stringify(`${sourceRepo}/.devcontainer/skills/dispatch-work/scripts/validate-dispatch-work-fixtures.ts`)};
+
+const result = process.env.SEEDSTACK_RESULT_FILE;
+if (!result) process.exit(2);
+const repo = process.cwd();
+const match = /-(dispatch|manage)-(.+)\\.result\\.json$/.exec(result);
+const role = match?.[1] ?? "unknown";
+const seed = match?.[2] ?? "seed-test";
+const log = process.env.SEEDSTACK_FIXTURE_LAUNCH_LOG;
+if (log) appendFileSync(log, JSON.stringify({ role, cwd: repo, argv: process.argv.slice(2), result }) + "\\n");
+
+if (role === "dispatch") {
+  mkdirSync(join(repo, "src"), { recursive: true });
+  const round = join(repo, "tmp", "dispatch-work", seed, "round-1");
+  makeFixtureRound(repo, seed, round, "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", true, "pid:" + process.pid, true, "supervisor");
+  for (const prompt of ["execute-prompt.md", "implement-a1-prompt.md", "review-r1-a1-prompt.md", "verify-1-prompt.md"]) {
+    const promptPath = join(round, prompt);
+    writeFileSync(promptPath, readFileSync(promptPath, "utf8").replace(/repo_edit_roots=""/g, 'repo_edit_roots="src"'));
+  }
+  const dispatchRoot = join(repo, "tmp", "dispatch-work", seed);
+  const roundRel = "tmp/dispatch-work/" + seed + "/round-1";
+  writeFileSync(join(round, "executor-report.md"), [
+    "## Summary",
+    "status: pass",
+    "changed_files: none",
+    "tests: fixture dispatch artifacts generated",
+    "blockers: none",
+    "next_action: close",
+    "",
+    "Verdict: pass",
+    "Recommendation: close",
+    "",
+  ].join("\\n"));
+  writeFileSync(join(round, "implement-a1-report.md"), [
+    "## Summary",
+    "status: done",
+    "changed_files: none",
+    "tests: fixture dispatch artifacts generated",
+    "blockers: none",
+    "next_action: close",
+    "",
+    "Outcome: done",
+    "Recommendation: close",
+    "",
+  ].join("\\n"));
+  writeFileSync(join(round, "review-r1-a1.md"), [
+    "## Summary",
+    "status: pass",
+    "changed_files: none",
+    "tests: fixture dispatch artifacts inspected",
+    "blockers: none",
+    "next_action: close",
+    "",
+    "Verdict: pass",
+    "Recommendation: close",
+    "",
+  ].join("\\n"));
+  writeFileSync(join(round, "verify-1.md"), [
+    "## Summary",
+    "status: pass",
+    "changed_files: none",
+    "tests: fixture dispatch artifacts inspected",
+    "blockers: none",
+    "next_action: close",
+    "",
+    "Verdict: pass",
+    "",
+  ].join("\\n"));
+  writeFileSync(join(dispatchRoot, "knowledge-capture.md"), "capture_state=none_qualified\\naccepted IDs: []\\n");
+  writeFileSync(join(dispatchRoot, "gate.md"), [
+    "# Gate: " + seed,
+    "",
+    "decision: close",
+    "",
+    "## Evidence Paths",
+    "| path | outcome |",
+    "|------|---------|",
+    "| " + roundRel + "/executor-report.md | pass |",
+    "| " + roundRel + "/implement-a1-report.md | done |",
+    "| " + roundRel + "/review-r1-a1.md | pass |",
+    "| " + roundRel + "/verify-1.md | pass |",
+    "",
+    "## Dirty Guard",
+    "- command: git status --porcelain=v1 --untracked-files=all",
+    "- snapshot: loop supervisor snapshot",
+    "- implementation paths: none",
+    "- queue paths: none",
+    "- unexpected paths: none",
+    "",
+    String.fromCharCode(96, 96, 96) + "json",
+    JSON.stringify({
+      contract: "dirty_guard.v1",
+      baseline_paths: [],
+      actual_impl_paths: [],
+      queue_paths: [],
+      unexpected_paths: [],
+      snapshot_path: "loop supervisor snapshot",
+    }, null, 2),
+    String.fromCharCode(96, 96, 96),
+    "",
+  ].join("\\n"));
+  writeFileSync(result, JSON.stringify({
+    contract: "seedstack_child_result.v1",
+    ok: true,
+    role: "dispatch",
+    seed,
+    decision: "closed",
+    round_path: roundRel,
+    followups_requested: 0,
+    followups_created: [],
+  }, null, 2) + "\\n");
+} else if (role === "manage") {
+  writeFileSync(result, JSON.stringify({
+    contract: "seedstack_child_result.v1",
+    ok: true,
+    role: "manage",
+    seed,
+    decision: "done",
+    followups_requested: 0,
+    followups_created: [],
+    proposed_queue_operations: [{
+      op_type: "close-current",
+      target_seed: seed,
+      rationale: "fixture dispatch closed cleanly",
+      source_artifact_refs: [result],
+      expected_preconditions: ["seed " + seed + " is still open", "latest dispatch reconcile result still matches fixture"],
+      details: {},
+    }],
+  }, null, 2) + "\\n");
+} else {
+  process.stderr.write("unknown role for " + result + "\\n");
+  process.exit(2);
+}
+`,
+  );
+  chmodSync(path, 0o755);
+}
+
+function writeSupervisorFixtureSeedCli(path: string, stateFile: string, logFile: string): void {
+  writeFileSync(
+    path,
+    `#!/usr/bin/env bun
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const stateFile = ${JSON.stringify(stateFile)};
+const logFile = ${JSON.stringify(logFile)};
+const args = process.argv.slice(2);
+appendFileSync(logFile, JSON.stringify({ cwd: process.cwd(), argv: args }) + "\\n");
+const state = JSON.parse(readFileSync(stateFile, "utf8"));
+const command = args[0];
+const issueFor = (id) => state.issues.find((issue) => issue.id === id);
+const writeState = () => {
+  writeFileSync(stateFile, JSON.stringify(state, null, 2) + "\\n");
+  writeFileSync(join(process.cwd(), ".seeds", "issues.jsonl"), state.issues.map((issue) => JSON.stringify(issue)).join("\\n") + "\\n");
+};
+const envelope = (data) => JSON.stringify({ ok: true, command, data }) + "\\n";
+if (command === "health") process.stdout.write(envelope({ summary: { pass: 1, warning: 0, error: 0 }, checks: [] }));
+else if (command === "list") process.stdout.write(envelope({ count: state.issues.length, issues: state.issues }));
+else if (command === "ready") process.stdout.write(envelope({ count: state.issues.filter((issue) => issue.status !== "closed").length, issues: state.issues.filter((issue) => issue.status !== "closed") }));
+else if (command === "blocked") process.stdout.write(envelope({ count: 0, issues: [] }));
+else if (command === "close") {
+  const issue = issueFor(args[1]);
+  if (!issue) process.exit(3);
+  issue.status = "closed";
+  writeState();
+  process.stdout.write(JSON.stringify({ ok: true, command, id: args[1] }) + "\\n");
+} else if (command === "create") {
+  process.stderr.write("fixture does not create follow-ups\\n");
+  process.exit(2);
+} else {
+  process.stderr.write("unsupported " + command + "\\n");
+  process.exit(2);
+}
+`,
+  );
+  chmodSync(path, 0o755);
+}
+
+function setupSupervisorFixtureRepo(root: string): { repo: string; linked: string; seed: string } {
+  const repo = join(root, "repo");
+  const seed = "seed-test";
+  mkdirSync(join(repo, ".seeds"), { recursive: true });
+  mkdirSync(join(repo, "src"), { recursive: true });
+  writeFileSync(join(repo, "README.md"), "fixture\\n");
+  writeFileSync(join(repo, "src", "fixture.txt"), "initial\\n");
+  writeFileSync(join(repo, ".seeds", "issues.jsonl"), `${JSON.stringify({
+    id: seed,
+    title: "Fixture seed",
+    status: "open",
+    description: "Fixture seed\n\narea: src\n",
+    labels: ["impl"],
+    priority: 1,
+    createdAt: "2026-01-01T00:00:00Z",
+  })}\\n`);
+  runGitSelfTest(repo, ["init", "-b", "main"]);
+  runGitSelfTest(repo, ["config", "user.email", "seedstack@example.test"]);
+  runGitSelfTest(repo, ["config", "user.name", "Seedstack Test"]);
+  runGitSelfTest(repo, ["add", "."]);
+  runGitSelfTest(repo, ["commit", "-m", "fixture init"]);
+  const linked = join(root, "linked");
+  runGitSelfTest(repo, ["worktree", "add", "-b", "fixture-linked", linked]);
+  return { repo, linked, seed };
+}
+
+function runSupervisorFixture(root: string, repo: string, seed: string, fixtureName: string): JsonObject {
+  const seedstackDir = join(repo, "tmp", "seedstack", fixtureName);
+  const adoptionSelection = join(seedstackDir, "adoption-selection.json");
+  const stateFile = join(root, `${fixtureName}-seed-cli-state.json`);
+  const seedCliLog = join(root, `${fixtureName}-seed-cli.jsonl`);
+  const launchLog = join(root, `${fixtureName}-child-launch.jsonl`);
+  const fakeSeedCli = join(root, `${fixtureName}-seed-cli`);
+  const fakeCodex = join(root, `${fixtureName}-codex`);
+  mkdirSync(seedstackDir, { recursive: true });
+  writeJson(adoptionSelection, { adopted_seed_ids: [seed], excluded_open_seed_ids: [] });
+  writeJson(stateFile, {
+    issues: [{ id: seed, title: "Fixture seed", status: "open", description: "Fixture seed\n\narea: src\n", labels: ["impl"], priority: 1, createdAt: "2026-01-01T00:00:00Z" }],
+  });
+  writeSupervisorFixtureSeedCli(fakeSeedCli, stateFile, seedCliLog);
+  writeSupervisorFixtureCodex(fakeCodex, WORKSPACE_ROOT);
+  const result = spawnSync(process.execPath, [
+    fileURLToPath(import.meta.url),
+    "--repo",
+    repo,
+    "--seedstack-dir",
+    seedstackDir,
+    "--adoption-selection",
+    adoptionSelection,
+    "--seed-cli",
+    fakeSeedCli,
+    "--codex-bin",
+    fakeCodex,
+    "--commit-policy",
+    "per_seed",
+    "--knowledge-capture",
+    "audit",
+    "--post-seed-delay-ms",
+    "1",
+    "--max-iterations",
+    "8",
+    "--pretty",
+  ], {
+    cwd: optionsGlobal.repo,
+    encoding: "utf8",
+    maxBuffer: 50 * 1024 * 1024,
+    env: { ...process.env, SEEDSTACK_FIXTURE_LAUNCH_LOG: launchLog },
+  });
+  const validationDebug = existsSync(loopDir(seedstackDir))
+    ? readdirSync(loopDir(seedstackDir))
+      .filter((file) => file.includes("dispatch-work-validation"))
+      .map((file) => `${file}: ${readFileSync(join(loopDir(seedstackDir), file), "utf8").slice(0, 4000)}`)
+      .join("\n")
+    : "";
+  const childDebug = existsSync(loopDir(seedstackDir))
+    ? readdirSync(loopDir(seedstackDir))
+      .filter((file) => file.endsWith(".log"))
+      .map((file) => `${file}: ${readFileSync(join(loopDir(seedstackDir), file), "utf8").slice(0, 4000)}`)
+      .join("\n")
+    : "";
+  assertSelfTest((result.status ?? 1) === 0, `${fixtureName} supervisor exits cleanly: ${result.stderr || result.stdout}\n${validationDebug}\n${childDebug}`);
+  const finalLine = result.stdout.trim().split(/\r?\n/).filter(Boolean).pop() ?? "{}";
+  const parsed = JSON.parse(finalLine) as JsonObject;
+  assertSelfTest(parsed.ok === true && parsed.state === "done", `${fixtureName} supervisor reaches done`);
+  const seedCliRuns = readFileSync(seedCliLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as JsonObject);
+  const childRuns = readFileSync(launchLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as JsonObject);
+  assertSelfTest(seedCliRuns.length > 0 && seedCliRuns.every((run) => run.cwd === repo), `${fixtureName} seed-cli cwd uses target repo`);
+  assertSelfTest(childRuns.some((run) => run.role === "dispatch" && run.cwd === repo), `${fixtureName} dispatch child cwd uses target repo`);
+  assertSelfTest(childRuns.some((run) => run.role === "manage" && run.cwd === repo), `${fixtureName} manage child cwd uses target repo`);
+  assertSelfTest(existsSync(join(seedstackDir, "commit-ledger.md")), `${fixtureName} commit ledger written`);
+  const runState = JSON.parse(readFileSync(statePath(seedstackDir), "utf8")) as JsonObject;
+  const worktree = isObject(runState.worktree) ? runState.worktree : {};
+  assertSelfTest(worktree.worktree_root === repo, `${fixtureName} run-state worktree root uses target repo`);
+  const ledger = readFileSync(join(seedstackDir, "commit-ledger.md"), "utf8");
+  assertSelfTest(ledger.includes(repo), `${fixtureName} commit ledger records target worktree root`);
+  assertSelfTest(ledger.includes(".seeds/issues.jsonl"), `${fixtureName} commit ledger records queue changed path allowlist`);
+  return { seedstackDir, seedCliLog, launchLog, final: parsed };
+}
+
+function runLinkedWorktreeSupervisorFixtureSelfTest(): void {
+  const root = mkdtempSync(join(tmpdir(), "seedstack-linked-supervisor-"));
+  try {
+    const { repo, linked, seed } = setupSupervisorFixtureRepo(root);
+    const previousOptions = optionsGlobal;
+    optionsGlobal = parseArgs(["--repo", repo]);
+    try {
+      runSupervisorFixture(root, repo, seed, "main-fixture");
+      runSupervisorFixture(root, linked, seed, "linked-fixture");
+      const duplicate = join(root, "linked-duplicate");
+      runGitSelfTest(repo, ["worktree", "add", "--force", duplicate, "fixture-linked"]);
+      const duplicateSeedstackDir = join(linked, "tmp", "seedstack", "duplicate-fixture");
+      const duplicateAdoption = join(duplicateSeedstackDir, "adoption-selection.json");
+      const duplicateState = join(root, "duplicate-state.json");
+      const duplicateSeedCliLog = join(root, "duplicate-seed-cli.jsonl");
+      const duplicateChildLog = join(root, "duplicate-child.jsonl");
+      const duplicateSeedCli = join(root, "duplicate-seed-cli");
+      const duplicateCodex = join(root, "duplicate-codex");
+      mkdirSync(duplicateSeedstackDir, { recursive: true });
+      writeJson(duplicateAdoption, { adopted_seed_ids: [seed], excluded_open_seed_ids: [] });
+      writeJson(duplicateState, { issues: [{ id: seed, status: "open", description: "Fixture seed\n\narea: src\n", labels: ["impl"], priority: 1, createdAt: "2026-01-01T00:00:00Z" }] });
+      writeSupervisorFixtureSeedCli(duplicateSeedCli, duplicateState, duplicateSeedCliLog);
+      writeSupervisorFixtureCodex(duplicateCodex, WORKSPACE_ROOT);
+      const blocked = spawnSync(process.execPath, [
+        fileURLToPath(import.meta.url),
+        "--repo",
+        linked,
+        "--seedstack-dir",
+        duplicateSeedstackDir,
+        "--adoption-selection",
+        duplicateAdoption,
+        "--seed-cli",
+        duplicateSeedCli,
+        "--codex-bin",
+        duplicateCodex,
+        "--max-iterations",
+        "1",
+      ], {
+        cwd: repo,
+        encoding: "utf8",
+        maxBuffer: 10 * 1024 * 1024,
+        env: { ...process.env, SEEDSTACK_FIXTURE_LAUNCH_LOG: duplicateChildLog },
+      });
+      assertSelfTest((blocked.status ?? 0) !== 0, "same-branch duplicate linked worktree blocks supervisor");
+      assertSelfTest((blocked.stdout + blocked.stderr).includes("same-branch"), "duplicate linked worktree error mentions policy");
+      assertSelfTest(!existsSync(duplicateSeedCliLog), "duplicate linked worktree blocks before seed-cli queue mutation");
+      assertSelfTest(!existsSync(duplicateChildLog), "duplicate linked worktree blocks before child launch");
+    } finally {
+      optionsGlobal = previousOptions;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 async function selfTest(pretty: boolean): Promise<never> {
   const parsed = parseArgs([
     "--child-total-timeout-ms",
@@ -3320,6 +3659,7 @@ async function selfTest(pretty: boolean): Promise<never> {
   runArtifactRecoveryFixtureSelfTest();
   runLoopDirtyGuardPolicyFixtureSelfTest();
   runManageQueueOpsSelfTest();
+  runLinkedWorktreeSupervisorFixtureSelfTest();
   const queueDirty = queueDirtyPathsFromStatus([
     " M .seeds/issues.jsonl",
     "?? .seeds/knowledge.jsonl",
@@ -3497,6 +3837,7 @@ async function selfTest(pretty: boolean): Promise<never> {
       "artifact_recovery_fixtures",
       "loop_dirty_guard_policy_fixture",
       "manage_queue_ops_fixture",
+      "linked_worktree_supervisor_fixture",
     ],
   };
   process.stdout.write(`${JSON.stringify(result, null, pretty ? 2 : 0)}\n`);
