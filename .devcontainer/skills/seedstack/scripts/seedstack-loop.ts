@@ -28,6 +28,9 @@ import {
   loopStatePath,
   eventsPath,
   loopDir,
+  recoveryAttemptDir,
+  recoveryScanPath,
+  recoveryValidationPath,
   commitLedgerPath,
   dashboardPath,
   stopAfterSeedPath,
@@ -2393,6 +2396,79 @@ function runLoopIterationAllocationSelfTest(): void {
   }
 }
 
+function runArtifactRecoveryFixtureSelfTest(): void {
+  const root = mkdtempSync(join(tmpdir(), "seedstack-artifact-recovery-"));
+  const adoptionSelection = join(root, "adoption-selection.json");
+  const previousOptions = optionsGlobal;
+  writeFileSync(adoptionSelection, JSON.stringify({ adopted_seed_ids: ["seed-test"] }));
+  optionsGlobal = {
+    ...parseArgs(["--repo", root, "--seedstack-dir", root, "--adoption-selection", adoptionSelection]),
+    seedstackDir: root,
+    adoptionSelection,
+  };
+
+  try {
+    mkdirSync(loopDir(root), { recursive: true });
+    const firstScan = iterationArtifactPath(root, 1, "scan");
+    writeFileSync(firstScan, "{\"ok\":true}\n");
+
+    const resumed = allocateSupervisorIteration(root).iteration;
+    const resumedScan = artifact(root, "scan", resumed);
+    writeFileSync(resumedScan, "{\"ok\":true}\n");
+    assertSelfTest(resumed === 2, "resumed supervisor run allocates loop/0002 after loop/0001");
+    assertSelfTest(firstScan.endsWith("loop/0001-scan.json"), "first scan fixture uses loop/0001");
+    assertSelfTest(resumedScan.endsWith("loop/0002-scan.json"), "resumed scan fixture uses loop/0002");
+    assertSelfTest(existsSync(firstScan), "resumed supervisor run does not clobber loop/0001");
+
+    const firstDispatch = resultPath(root, "dispatch", "seed-test", resumed);
+    writeFileSync(firstDispatch, "{\"decision\":\"blocked\"}\n");
+    const retryIteration = allocateSupervisorIteration(root).iteration;
+    const retryDirty = artifact(root, "retry-dirty-seed-test", retryIteration);
+    const retryDispatch = resultPath(root, "dispatch", "seed-test", retryIteration);
+    writeFileSync(retryDirty, "{\"ok\":true}\n");
+    writeFileSync(retryDispatch, "{\"decision\":\"closed\"}\n");
+    assertSelfTest(retryIteration === 3, "retry same seed allocates separate loop iteration");
+    assertSelfTest(firstDispatch.endsWith("loop/0002-dispatch-seed-test.result.json"), "first dispatch result keeps resumed iteration");
+    assertSelfTest(retryDirty.endsWith("loop/0003-retry-dirty-seed-test.json"), "retry dirty artifact uses fresh iteration");
+    assertSelfTest(retryDispatch.endsWith("loop/0003-dispatch-seed-test.result.json"), "retry dispatch result uses fresh iteration");
+    assertSelfTest(existsSync(firstDispatch), "retry same seed does not clobber previous dispatch result");
+
+    mkdirSync(recoveryAttemptDir(root, 1), { recursive: true });
+    writeFileSync(recoveryScanPath(root, 1), "{\"ok\":true}\n");
+    writeFileSync(recoveryValidationPath(root, 1), "{\"ok\":true}\n");
+    const rootRecoveryFiles = readdirSync(root).filter((entry) => /^recovery-.*\.(?:json|md)$/.test(entry));
+    assertSelfTest(rootRecoveryFiles.length === 0, "recovery artifacts stay under recovery/rec-####");
+  } finally {
+    optionsGlobal = previousOptions;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function runLoopDirtyGuardPolicyFixtureSelfTest(): void {
+  const root = mkdtempSync(join(tmpdir(), "seedstack-loop-dirty-guard-"));
+  try {
+    const repo = join(root, "repo");
+    const seed = "seed-test";
+    const round = join(repo, "tmp", "dispatch-work", seed, "round-1");
+    mkdirSync(round, { recursive: true });
+
+    const result = spawnSync(process.execPath, [dispatchValidatorPath(), "--self-test"], {
+      cwd: repo,
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    assertSelfTest((result.status ?? 1) === 0, "dispatch validator self-test covers loop dirty guard policy");
+    const parsed = JSON.parse(result.stdout) as JsonObject;
+    const tests = Array.isArray(parsed.tests) ? parsed.tests.filter((item): item is JsonObject => typeof item === "object" && item !== null) : [];
+    assertSelfTest(
+      tests.some((test) => test.name === "loop dirty guard snapshot mismatch softens" && test.pass === true),
+      "loop dirty guard policy softens equivalent supervisor snapshot mismatches",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 async function selfTest(pretty: boolean): Promise<never> {
   const parsed = parseArgs([
     "--child-total-timeout-ms",
@@ -2465,6 +2541,8 @@ async function selfTest(pretty: boolean): Promise<never> {
   assertSelfTest(!beforeFirstDispatch({ state: "idle", dispatch_attempts: { S1: 1 } }), "dispatch attempt marks dispatch started");
   assertSelfTest(!beforeFirstDispatch({ state: "idle", latest_dispatch: { seed_id: "S1" } }), "latest dispatch marks dispatch started");
   runLoopIterationAllocationSelfTest();
+  runArtifactRecoveryFixtureSelfTest();
+  runLoopDirtyGuardPolicyFixtureSelfTest();
   const queueDirty = queueDirtyPathsFromStatus([
     " M .seeds/issues.jsonl",
     "?? .seeds/knowledge.jsonl",
@@ -2638,6 +2716,8 @@ async function selfTest(pretty: boolean): Promise<never> {
       "gate_dirty_expected_paths",
       "loop_state_contract",
       "loop_iteration_allocation",
+      "artifact_recovery_fixtures",
+      "loop_dirty_guard_policy_fixture",
     ],
   };
   process.stdout.write(`${JSON.stringify(result, null, pretty ? 2 : 0)}\n`);

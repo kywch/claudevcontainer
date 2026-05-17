@@ -2,7 +2,7 @@
  * seedstack-paths.ts — single source of truth for seedstack loop artifact paths.
  * Pure path functions, plus allocation helpers that inspect existing dirs.
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -225,6 +225,10 @@ function runSelfTest(pretty: boolean): void {
     assert(recoveryCommitCheckPath(dir, 1).endsWith("recovery/rec-0001/commit-check.json"), "commit check path mismatch");
     assert(recoveryCheckPath(dir, 1).endsWith("recovery/rec-0001/recovery-check.json"), "recovery check path mismatch");
     assert(recoveryNotesPath(dir, 1).endsWith("recovery/rec-0001/notes.md"), "notes path mismatch");
+    assert(
+      readdirSync(dir).every((entry) => !/^recovery-.*\.(?:json|md)$/.test(entry)),
+      "recovery helpers must not allocate root-level recovery artifacts",
+    );
 
     const result = {
       contract: "seedstack_paths_self_test.v1",
