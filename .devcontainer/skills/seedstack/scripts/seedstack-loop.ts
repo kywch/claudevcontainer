@@ -8,7 +8,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DEFAULT_CHILD_SILENT_PROBE_MS,
@@ -439,15 +439,20 @@ function parseArgs(argv: string[]): Options {
   const originalRepo = options.repo;
   if (options.seedstackDir) options.seedstackDir = resolve(callerCwd, options.seedstackDir);
   if (options.adoptionSelection) options.adoptionSelection = resolve(callerCwd, options.adoptionSelection);
+  const persistedRepo = persistedRepoFromRunState(options.seedstackDir);
   const preflight = preflightRepo({
-    repoInput: originalRepo,
+    repoInput: persistedRepo ?? originalRepo,
     cwd: callerCwd,
     policy: options.worktreePolicy,
     requireWorktree: options.requireWorktree,
   });
-  options.originalRepo = preflight.metadata.original_repo_path;
+  options.originalRepo = originalRepo;
   options.repo = preflight.repo;
-  options.worktree = preflight.metadata;
+  options.worktree = {
+    ...preflight.metadata,
+    original_repo_input: originalRepo,
+    original_repo_path: resolve(callerCwd, originalRepo),
+  };
   if (options.mode === "auto" && !options.commitPolicyExplicit) options.commitPolicy = "per_seed";
   if (options.maxSeedTarget >= options.splitCandidate) {
     throw new Error("--max-seed-target must be lower than --split-candidate");
@@ -458,6 +463,20 @@ function parseArgs(argv: string[]): Options {
 
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
+}
+
+function persistedRepoFromRunState(seedstackDir: string | undefined): string | null {
+  if (!seedstackDir) return null;
+  const path = statePath(seedstackDir);
+  if (!existsSync(path)) return null;
+  try {
+    const raw = readJson(path);
+    if (!isObject(raw)) return null;
+    const repo = stringField(raw.repo);
+    return repo && isAbsolute(repo) ? repo : null;
+  } catch {
+    return null;
+  }
 }
 
 function writeJson(path: string, value: unknown): void {
@@ -897,7 +916,7 @@ function writeDashboard(seedstackDir: string, state: string, iteration: number):
   const elapsed = dashboardLoopStartedAt ? fmtDuration(now - dashboardLoopStartedAt) : "—";
   const phaseElapsed = dashboardPhaseStartedAt ? fmtDuration(now - dashboardPhaseStartedAt) : "";
 
-  let current = `State: **${state}**`;
+  let current = `State: **${state}** | Repo: \`${optionsGlobal.repo}\` | Worktree: ${worktreeSummary(optionsGlobal.worktree)}`;
   if (dashboardCurrentSeed) {
     current += ` | Work order: \`${dashboardCurrentSeed}\``;
     if (dashboardCurrentPhase !== "idle") current += ` | Phase: ${dashboardCurrentPhase}`;
@@ -941,6 +960,13 @@ ${completedTable}${failedTable}
 Seeds: ${done} done${failed > 0 ? `, ${failed} failed/skipped` : ""} of ${done + failed} processed
 `;
   writeFileSync(dashboardPath(seedstackDir), md);
+}
+
+function worktreeSummary(worktree: WorktreeMetadata): string {
+  const kind = worktree.linked ? "linked" : "main";
+  const branch = worktree.branch || "detached";
+  const head = worktree.head ? worktree.head.slice(0, 12) : "no-head";
+  return `${kind} ${branch} ${head} policy=${worktree.policy}`;
 }
 
 function checkerPath(name: string): string {
@@ -988,9 +1014,16 @@ function transition(
 }
 
 function updateRunState(seedstackDir: string, iteration: number, next: RunStateName, args: string[]): JsonObject {
+  const worktreeMetadataPath = writeLoopJson(seedstackDir, iteration, `worktree-metadata-${next}`, optionsGlobal.worktree);
   return runJson(seedstackDir, iteration, `update-${next}`, checkerPath("update-run-state.ts"), [
     "--repo",
     optionsGlobal.repo,
+    "--original-repo",
+    optionsGlobal.originalRepo,
+    "--worktree-policy",
+    optionsGlobal.worktreePolicy,
+    "--worktree-metadata-file",
+    worktreeMetadataPath,
     "--seedstack-dir",
     seedstackDir,
     "--state",
@@ -2422,6 +2455,29 @@ function runWorktreePreflightSelfTest(): void {
     assertSelfTest(linkedPreflight.metadata.linked, "linked worktree accepted by linked-ok");
     const requireLinked = preflightRepo({ repoInput: linked, cwd: root, policy: "linked-ok", requireWorktree: true });
     assertSelfTest(requireLinked.metadata.require_worktree, "require-worktree accepted linked worktree");
+
+    const persistedSeedstackDir = join(root, "persisted-stack");
+    const adoptionSelection = join(root, "adoption-selection.json");
+    mkdirSync(persistedSeedstackDir, { recursive: true });
+    writeJson(statePath(persistedSeedstackDir), {
+      state: "dispatching",
+      repo: linked,
+      worktree: linkedPreflight.metadata,
+    });
+    writeJson(adoptionSelection, { adopted_seed_ids: ["seed-test"] });
+    const fromPersisted = parseArgs([
+      "--repo",
+      "relative-that-would-be-wrong-from-cwd",
+      "--seedstack-dir",
+      persistedSeedstackDir,
+      "--adoption-selection",
+      adoptionSelection,
+    ]);
+    assertSelfTest(fromPersisted.repo === linked, "run-state repo wins over cwd-relative repo during resume");
+    assertSelfTest(
+      fromPersisted.originalRepo === "relative-that-would-be-wrong-from-cwd",
+      "original repo argument preserved while using persisted repo",
+    );
 
     try {
       preflightRepo({ repoInput: repo, cwd: root, policy: "linked-ok", requireWorktree: true });

@@ -28,6 +28,9 @@ type JsonObject = Record<string, unknown>;
 
 type Options = {
   repo: string;
+  originalRepo?: string;
+  worktreePolicy?: "linked-ok" | "allow-same-branch";
+  worktreeMetadataFile?: string;
   seedstackDir?: string;
   state?: RunStateName;
   seed?: string;
@@ -83,6 +86,10 @@ Args:
   --seedstack-dir <path>              Artifact dir containing run-state.json/run.md.
   --state <idle|dispatching|managing|done|exhausted|blocked|escalated|loop_cap>
   --repo <path>                       Repo root. Default: cwd.
+  --original-repo <path>              Original repo argument before normalization.
+  --worktree-policy <linked-ok|allow-same-branch>
+                                     Active worktree policy.
+  --worktree-metadata-file <json>     Worktree preflight metadata object.
   --seed <id>                         Current chosen/in-flight seed.
   --candidate <id>                    Ready candidate work order id. Repeatable.
   --candidates-file <json>            Array or object with candidates/ready/adopted_ready_ids.
@@ -164,6 +171,20 @@ function parseArgs(argv: string[]): Options {
       case "--repo":
         options.repo = take();
         break;
+      case "--original-repo":
+        options.originalRepo = take();
+        break;
+      case "--worktree-policy": {
+        const policy = take();
+        if (policy !== "linked-ok" && policy !== "allow-same-branch") {
+          throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+        }
+        options.worktreePolicy = policy;
+        break;
+      }
+      case "--worktree-metadata-file":
+        options.worktreeMetadataFile = take();
+        break;
       case "--seedstack-dir":
         options.seedstackDir = take();
         break;
@@ -223,6 +244,15 @@ function parseArgs(argv: string[]): Options {
         break;
       default:
         if (arg.startsWith("--repo=")) options.repo = arg.slice("--repo=".length);
+        else if (arg.startsWith("--original-repo=")) options.originalRepo = arg.slice("--original-repo=".length);
+        else if (arg.startsWith("--worktree-policy=")) {
+          const policy = arg.slice("--worktree-policy=".length);
+          if (policy !== "linked-ok" && policy !== "allow-same-branch") {
+            throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+          }
+          options.worktreePolicy = policy;
+        }
+        else if (arg.startsWith("--worktree-metadata-file=")) options.worktreeMetadataFile = arg.slice("--worktree-metadata-file=".length);
         else if (arg.startsWith("--seedstack-dir=")) options.seedstackDir = arg.slice("--seedstack-dir=".length);
         else if (arg.startsWith("--state=")) options.state = parseState(arg.slice("--state=".length));
         else if (arg.startsWith("--seed=")) options.seed = arg.slice("--seed=".length);
@@ -252,6 +282,7 @@ function parseArgs(argv: string[]): Options {
 
   options.repo = resolve(options.repo);
   if (options.seedstackDir) options.seedstackDir = resolve(options.seedstackDir);
+  if (options.worktreeMetadataFile) options.worktreeMetadataFile = resolve(options.worktreeMetadataFile);
   return options;
 }
 
@@ -398,6 +429,13 @@ function updateState(existing: JsonObject, options: Options, now: string): { sta
   state.state = options.state;
   state.updated_at = now;
   state.repo = options.repo;
+  if (options.originalRepo !== undefined) state.original_repo = options.originalRepo;
+  if (options.worktreePolicy !== undefined) state.worktree_policy = options.worktreePolicy;
+  if (options.worktreeMetadataFile) {
+    const metadata = readJson(options.worktreeMetadataFile);
+    if (!isObject(metadata)) throw new Error("--worktree-metadata-file must contain object");
+    state.worktree = metadata;
+  }
   if (options.loopIteration !== undefined) state.loop_iteration = options.loopIteration;
   if (options.commitPolicy) state.commit_policy = options.commitPolicy;
   if (options.decision) state.decision = options.decision;
@@ -540,6 +578,12 @@ function renderRunMarkdown(state: JsonObject): string {
   const dirtyPaths = Array.isArray(dirty.paths) ? dirty.paths.filter(isObject) : [];
   const unexpected = stringArray(dirty.unexpected_paths);
   const followups = Array.isArray(state.followups) ? state.followups.length : state.followup_count;
+  const worktree = isObject(state.worktree) ? state.worktree : {};
+  const worktreeRef = [
+    worktree.linked === true ? "linked" : worktree.linked === false ? "main" : "unknown",
+    typeof worktree.branch === "string" && worktree.branch ? worktree.branch : "detached",
+    typeof worktree.head === "string" && worktree.head ? String(worktree.head).slice(0, 12) : "no-head",
+  ].join(" ");
 
   return [
     `# Seedstack Run: ${title}`,
@@ -548,6 +592,9 @@ function renderRunMarkdown(state: JsonObject): string {
       state: state.state,
       updated_at: state.updated_at,
       repo: state.repo,
+      original_repo: state.original_repo,
+      worktree_policy: state.worktree_policy,
+      worktree: worktreeRef,
       cli: state.cli,
       mode: state.mode,
       commit_policy: state.commit_policy,
@@ -804,6 +851,47 @@ function selfTest(pretty: boolean): void {
     assert(dryRun.ok, "dry-run failed");
     assert(!existsSync(join(dryDir, "run-state.json")), "dry-run wrote state");
 
+    const worktreeMetadata = {
+      original_repo_input: "relative-linked",
+      original_repo_path: join(dir, "relative-linked"),
+      repo: join(dir, "linked"),
+      git_common_dir: join(dir, "repo", ".git"),
+      git_dir: join(dir, "repo", ".git", "worktrees", "linked"),
+      worktree_root: join(dir, "linked"),
+      branch: "feature",
+      head: "1234567890abcdef",
+      linked: true,
+      policy: "linked-ok",
+      require_worktree: true,
+    };
+    const worktreeMetadataPath = join(dir, "worktree-metadata.json");
+    writeFileSync(worktreeMetadataPath, JSON.stringify(worktreeMetadata));
+    const worktreeRun = run({
+      repo: worktreeMetadata.repo,
+      originalRepo: "relative-linked",
+      worktreePolicy: "linked-ok",
+      worktreeMetadataFile: worktreeMetadataPath,
+      seedstackDir,
+      state: "idle",
+      decision: "refresh",
+      rationale: "worktree metadata round trip",
+      candidates: [],
+      events: [],
+      pretty,
+      dryRun: false,
+      selfTest: true,
+    });
+    assert(worktreeRun.ok, "worktree metadata run failed");
+    const worktreeState = readState(runStatePath(seedstackDir));
+    assert(worktreeState.repo === worktreeMetadata.repo, "normalized repo not recorded");
+    assert(worktreeState.original_repo === "relative-linked", "original repo argument not recorded");
+    assert(worktreeState.worktree_policy === "linked-ok", "worktree policy not recorded");
+    assert((worktreeState.worktree as JsonObject).linked === true, "linked worktree metadata not recorded");
+    const worktreeRunMd = readFileSync(join(seedstackDir, "run.md"), "utf8");
+    assert(worktreeRunMd.includes("- original_repo: relative-linked"), "run.md missing original repo");
+    assert(worktreeRunMd.includes("- worktree_policy: linked-ok"), "run.md missing worktree policy");
+    assert(worktreeRunMd.includes("- worktree: linked feature 1234567890ab"), "run.md missing compact worktree metadata");
+
     const dirtyPath = join(dir, "dirty.json");
     writeFileSync(
       dirtyPath,
@@ -1010,6 +1098,7 @@ function selfTest(pretty: boolean): void {
           "dispatching write",
           "done validation failure",
           "dry-run no write",
+          "worktree metadata round trip",
           "dirty normalization",
           "boundary health summary",
           "candidate preservation",
