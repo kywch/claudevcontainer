@@ -36,6 +36,12 @@ type LedgerRow = {
   gates: string;
   dirty_snapshot: string;
   policy: string;
+  worktree_root?: string;
+  branch?: string;
+  head_before?: string;
+  head_after?: string;
+  git_common_dir?: string;
+  changed_path_allowlist?: string;
 };
 
 type DirtyPath = {
@@ -46,11 +52,19 @@ type DirtyPath = {
 
 type RunState = {
   commit_policy?: unknown;
+  worktree?: {
+    worktree_root?: unknown;
+    branch?: unknown;
+    git_common_dir?: unknown;
+  };
   latest_dispatch?: {
     seed_id?: unknown;
     status?: unknown;
     commit?: unknown;
     commit_pending?: unknown;
+    head_before?: unknown;
+    head_after?: unknown;
+    changed_path_allowlist?: unknown;
     dispatch_artifact_root?: unknown;
   };
   dirty_state?: {
@@ -321,7 +335,20 @@ function parseLedger(path?: string): { rows: LedgerRow[]; warnings: Finding[] } 
       warnings.push({ code: "short_ledger_row", message: "ledger row has fewer cells than header" });
       continue;
     }
-    const get = (name: string) => cells[header?.indexOf(name) ?? -1] ?? "";
+    const fallbackColumns = new Map([
+      ["worktree root", 7],
+      ["branch", 8],
+      ["head before", 9],
+      ["head after", 10],
+      ["git common dir", 11],
+      ["changed path allowlist", 12],
+    ]);
+    const get = (name: string) => {
+      const headerIndex = header?.indexOf(name) ?? -1;
+      const fallbackIndex = fallbackColumns.get(name) ?? -1;
+      const index = headerIndex >= 0 ? headerIndex : fallbackIndex;
+      return cells[index] ?? "";
+    };
     rows.push({
       timestamp: get("timestamp"),
       seed: get("seed"),
@@ -330,6 +357,12 @@ function parseLedger(path?: string): { rows: LedgerRow[]; warnings: Finding[] } 
       gates: get("gates"),
       dirty_snapshot: get("dirty snapshot"),
       policy: get("policy"),
+      worktree_root: get("worktree root") || undefined,
+      branch: get("branch") || undefined,
+      head_before: get("head before") || undefined,
+      head_after: get("head after") || undefined,
+      git_common_dir: get("git common dir") || undefined,
+      changed_path_allowlist: get("changed path allowlist") || undefined,
     });
   }
   return { rows, warnings };
@@ -399,6 +432,66 @@ function commitsCompatible(left: string, right: string): boolean {
   const rightCommit = normalizeCommit(right);
   if (!isReasonableCommitPrefix(leftCommit) || !isReasonableCommitPrefix(rightCommit)) return false;
   return leftCommit === rightCommit || leftCommit.startsWith(rightCommit) || rightCommit.startsWith(leftCommit);
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function optionalStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.length > 0).sort(compareUtf8)
+    : [];
+}
+
+function compareLedgerPathAllowlist(row: LedgerRow, expectedPaths: string[], blockers: Finding[]): void {
+  if (!row.changed_path_allowlist) return;
+  const actual = row.changed_path_allowlist
+    .split(",")
+    .map((item) => stripDotSlash(item.trim()))
+    .filter(Boolean)
+    .sort(compareUtf8);
+  const expected = expectedPaths.map(stripDotSlash).filter(Boolean).sort(compareUtf8);
+  if (actual.join("\0") !== expected.join("\0")) {
+    blockers.push({
+      code: "ledger_changed_path_allowlist_mismatch",
+      message: "ledger changed path allowlist does not match expected paths",
+    });
+  }
+}
+
+function addLedgerMetadataBlockers(
+  blockers: Finding[],
+  row: LedgerRow | null,
+  runState: RunState | null,
+  expectedPaths: string[],
+): void {
+  if (!row) return;
+  const worktree = runState?.worktree;
+  const expectedWorktreeRoot = optionalString(worktree?.worktree_root);
+  const expectedBranch = optionalString(worktree?.branch);
+  const expectedGitCommonDir = optionalString(worktree?.git_common_dir);
+  const expectedHeadBefore = stringValue(runState?.latest_dispatch?.head_before);
+  const expectedHeadAfter = stringValue(runState?.latest_dispatch?.head_after);
+  const expectedAllowlist = optionalStringArray(runState?.latest_dispatch?.changed_path_allowlist);
+  const allowlist = expectedAllowlist.length > 0 ? expectedAllowlist : expectedPaths;
+
+  if (row.worktree_root && expectedWorktreeRoot && row.worktree_root !== expectedWorktreeRoot) {
+    blockers.push({ code: "ledger_worktree_root_mismatch", message: "ledger worktree root does not match run-state worktree root" });
+  }
+  if (row.branch && expectedBranch && row.branch !== expectedBranch) {
+    blockers.push({ code: "ledger_branch_mismatch", message: "ledger branch does not match run-state worktree branch" });
+  }
+  if (row.git_common_dir && expectedGitCommonDir && row.git_common_dir !== expectedGitCommonDir) {
+    blockers.push({ code: "ledger_git_common_dir_mismatch", message: "ledger git common dir does not match run-state worktree metadata" });
+  }
+  if (row.head_before && expectedHeadBefore && !commitsCompatible(row.head_before, expectedHeadBefore)) {
+    blockers.push({ code: "ledger_head_before_mismatch", message: "ledger head_before does not match run-state latest_dispatch" });
+  }
+  if (row.head_after && expectedHeadAfter && !commitsCompatible(row.head_after, expectedHeadAfter)) {
+    blockers.push({ code: "ledger_head_after_mismatch", message: "ledger head_after does not match run-state latest_dispatch" });
+  }
+  compareLedgerPathAllowlist(row, allowlist, blockers);
 }
 
 function findLedgerRows(rows: LedgerRow[], seed: string, fullCommit: string): LedgerRow[] {
@@ -748,6 +841,7 @@ function check(options: Options): Result {
   if (ledgerRow && ledgerRow.policy !== "per_seed") {
     blockers.push({ code: "ledger_policy_mismatch", message: `ledger row policy is ${ledgerRow.policy}` });
   }
+  addLedgerMetadataBlockers(blockers, ledgerRow, runState, expectedPaths);
 
   const gitExists = fullCommit === normalizeCommit(commit) ? !blockers.some((finding) => finding.code === "missing_git_commit") : true;
   const gitPaths = gitExists ? gitCommitPaths(options, commit) : [];
@@ -829,9 +923,32 @@ function selfTest(pretty: boolean): void {
           "",
         ].join("\n"),
       );
+    const writeWideLedger = (rows: string[]) =>
+      writeFileSync(
+        ledgerPath,
+        [
+          "| timestamp | seed | commit | subject | gates | dirty snapshot | policy | worktree root | branch | head before | head after | git common dir | changed path allowlist |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          ...rows,
+          "",
+        ].join("\n"),
+      );
     const baseState = {
       commit_policy: "per_seed",
-      latest_dispatch: { seed_id: "S1", status: "closed_clean", commit: "abc1234", commit_pending: false },
+      worktree: {
+        worktree_root: join(dir, "linked"),
+        branch: "feature",
+        git_common_dir: join(dir, "repo", ".git"),
+      },
+      latest_dispatch: {
+        seed_id: "S1",
+        status: "closed_clean",
+        commit: "abc1234",
+        commit_pending: false,
+        head_before: "def5678",
+        head_after: "abc1234",
+        changed_path_allowlist: ["src/ok.ts"],
+      },
       dirty_state: { paths: [{ path: "src/ok.ts", classification: "expected_seed" }] },
     };
     writeFileSync(gitExistsPath, "true\n");
@@ -862,6 +979,27 @@ function selfTest(pretty: boolean): void {
 
     const match = check(base);
     assertDecision("ledger row match", match, true, "ledger_ready");
+
+    writeWideLedger([
+      "| 2026-01-01T00:00:00Z | S1 | abc1234 | subject | gate | src/ok.ts expected_seed | per_seed | " +
+        `${join(dir, "linked")} | feature | def5678 | abc1234 | ${join(dir, "repo", ".git")} | src/ok.ts |`,
+    ]);
+    const wideMatch = check(base);
+    assertDecision("wide ledger row match", wideMatch, true, "ledger_ready");
+
+    writeLedger([
+      "| 2026-01-01T00:00:00Z | S1 | abc1234 | subject | gate | src/ok.ts expected_seed | per_seed | " +
+        `${join(dir, "linked")} | feature | def5678 | abc1234 | ${join(dir, "repo", ".git")} | src/ok.ts |`,
+    ]);
+    const migratedHeaderWideRow = check(base);
+    assertDecision("wide row under migrated header", migratedHeaderWideRow, true, "ledger_ready");
+
+    writeWideLedger([
+      "| 2026-01-01T00:00:00Z | S1 | abc1234 | subject | gate | src/ok.ts expected_seed | per_seed | " +
+        `${join(dir, "wrong")} | feature | def5678 | abc1234 | ${join(dir, "repo", ".git")} | src/ok.ts |`,
+    ]);
+    const wrongRoot = check(base);
+    assertDecision("wide ledger wrong worktree root", wrongRoot, false, "blocked_mismatch");
 
     writeRunState({ ...baseState, latest_dispatch: { seed_id: "S1", status: "closed_clean", commit_pending: false } });
     const missingCommit = check(base);
@@ -905,6 +1043,9 @@ function selfTest(pretty: boolean): void {
         cases: [
           { name: "default seedstack dir paths", ok: true, decision: "ledger_ready" },
           { name: "ledger row match", ok: match.ok, decision: match.decision },
+          { name: "wide ledger row match", ok: wideMatch.ok, decision: wideMatch.decision },
+          { name: "wide row under migrated header", ok: migratedHeaderWideRow.ok, decision: migratedHeaderWideRow.decision },
+          { name: "wide ledger wrong worktree root", ok: wrongRoot.ok, decision: wrongRoot.decision },
           { name: "missing commit", ok: missingCommit.ok, decision: missingCommit.decision },
           { name: "ledger mismatch", ok: ledgerMismatch.ok, decision: ledgerMismatch.decision },
           { name: "unexpected commit path", ok: unexpectedCommit.ok, decision: unexpectedCommit.decision },

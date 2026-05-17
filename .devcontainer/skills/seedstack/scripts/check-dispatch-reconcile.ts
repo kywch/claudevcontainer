@@ -484,7 +484,8 @@ function dirtyStatusBlocker(summary: Record<string, unknown>): Finding | null {
 }
 
 function isQueueMutationBlocker(finding: Finding): boolean {
-  return finding.code === "gate_queue_mutation_dirty";
+  if (finding.code === "gate_queue_mutation_dirty") return true;
+  return finding.code === "gate_dirty_guard_structured_mismatch" && finding.message.includes(".seeds/");
 }
 
 function pathValue(path: Record<string, unknown>): string {
@@ -815,6 +816,20 @@ function selfTest(pretty: boolean): void {
       warnings: [],
       summary: { seed: "S1", reports: { checked: 4 }, statuses: { checked: 4, clean: 4, dirty: 0 }, gate: { present: true, decision: "close", acceptedPaths: 1 } },
     });
+    const structuredQueueMutationFixture = writeFixture("structured-queue-mutation.json", {
+      contract: "dispatch-work-validation.v1",
+      ok: false,
+      blockers: [{
+        code: "gate_dirty_guard_structured_mismatch",
+        message: "dirty_guard.v1 unexpected_paths <none> does not match dirty snapshot .seeds/issues.jsonl",
+      }],
+      hard_blockers: [{
+        code: "gate_dirty_guard_structured_mismatch",
+        message: "dirty_guard.v1 unexpected_paths <none> does not match dirty snapshot .seeds/issues.jsonl",
+      }],
+      warnings: [],
+      summary: { seed: "S1", reports: { checked: 4 }, statuses: { checked: 4, clean: 4, dirty: 0 }, gate: { present: true, decision: "close", acceptedPaths: 1 } },
+    });
     const retryFixture = writeFixture("retry.json", {
       contract: "dispatch-work-validation.v1",
       ok: true,
@@ -905,6 +920,18 @@ function selfTest(pretty: boolean): void {
         result: check({
           ...base,
           validationFile: queueMutationFixture,
+          commitPolicy: "per_seed",
+          dirtyStatusFile: queueMutationStatusFile,
+          expectedSeeds: ["src/owned.ts"],
+        }),
+        ok: true,
+        decision: "commit_ready" as Decision,
+      },
+      {
+        name: "structured queue mutation commit ready",
+        result: check({
+          ...base,
+          validationFile: structuredQueueMutationFixture,
           commitPolicy: "per_seed",
           dirtyStatusFile: queueMutationStatusFile,
           expectedSeeds: ["src/owned.ts"],

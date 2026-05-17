@@ -1611,20 +1611,81 @@ function markdownCell(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 
-function appendCommitLedger(seedstackDir: string, seed: string, commit: string, dirtyPath: string): void {
+type PerSeedCommitMetadata = {
+  commit: string;
+  worktreeRoot: string | null;
+  branch: string | null;
+  headBefore: string;
+  headAfter: string;
+  gitCommonDir: string | null;
+  changedPathAllowlist: string[];
+};
+
+function ledgerHeaderColumns(): string[] {
+  return [
+    "timestamp",
+    "seed",
+    "commit",
+    "subject",
+    "gates",
+    "dirty snapshot",
+    "policy",
+    "worktree root",
+    "branch",
+    "head before",
+    "head after",
+    "git common dir",
+    "changed path allowlist",
+  ];
+}
+
+function currentWorktreeRoot(): string | null {
+  const root = runGit(["rev-parse", "--show-toplevel"], true).stdout;
+  return root || optionsGlobal.worktree.worktree_root;
+}
+
+function currentGitCommonDir(): string | null {
+  const dir = runGit(["rev-parse", "--path-format=absolute", "--git-common-dir"], true).stdout;
+  return dir || optionsGlobal.worktree.git_common_dir;
+}
+
+function currentBranch(): string | null {
+  const branch = runGit(["branch", "--show-current"], true).stdout;
+  return branch || optionsGlobal.worktree.branch;
+}
+
+function currentHead(): string {
+  return runGit(["rev-parse", "HEAD"]).stdout;
+}
+
+function expectedCommitHead(seedstackDir: string, seed: string): string | null {
+  const state = loadRunState(seedstackDir);
+  const latest = isObject(state.latest_dispatch) ? state.latest_dispatch : {};
+  if (stringField(latest.seed_id) !== seed) return null;
+  return stringField(latest.head_before) ?? stringField(latest.head_after) ?? stringField(latest.commit);
+}
+
+function appendCommitLedger(seedstackDir: string, seed: string, dirtyPath: string, metadata: PerSeedCommitMetadata): void {
   const path = commitLedgerPath(seedstackDir);
   if (!existsSync(path)) {
-    writeFileSync(path, "| timestamp | seed | commit | subject | gates | dirty snapshot | policy |\n| --- | --- | --- | --- | --- | --- | --- |\n");
+    const header = ledgerHeaderColumns();
+    writeFileSync(path, `| ${header.join(" | ")} |\n| ${header.map(() => "---").join(" | ")} |\n`);
   }
-  const subject = runGit(["show", "-s", "--format=%s", commit]).stdout;
+  const subject = runGit(["show", "-s", "--format=%s", metadata.commit]).stdout;
   const row = [
     new Date().toISOString(),
     seed,
-    commit,
+    metadata.commit,
     subject,
     "dispatch-close",
     dirtyPath,
     "per_seed",
+    metadata.worktreeRoot ?? "",
+    metadata.branch ?? "",
+    metadata.headBefore,
+    metadata.headAfter,
+    metadata.gitCommonDir ?? "",
+    metadata.changedPathAllowlist.join(","),
   ].map(markdownCell).join(" | ");
   writeFileSync(path, `| ${row} |\n`, { flag: "a" });
 }
@@ -1675,12 +1736,21 @@ function latestDispatchNonclosed(runState: JsonObject): boolean {
   return status === "nonclosed_reconciled";
 }
 
-function createPerSeedCommit(seedstackDir: string, iteration: number, seed: string, dirtyPath: string, dirty: JsonObject): string {
+function createPerSeedCommit(seedstackDir: string, iteration: number, seed: string, dirtyPath: string, dirty: JsonObject): PerSeedCommitMetadata {
   const beforeStaged = stagedPaths();
   if (beforeStaged.length > 0) {
     stop(seedstackDir, iteration, "blocked", "preexisting_staged_changes_before_auto_commit", {
       seed,
       staged_paths: beforeStaged,
+    });
+  }
+  const headBefore = currentHead();
+  const expectedHead = expectedCommitHead(seedstackDir, seed);
+  if (expectedHead && expectedHead !== headBefore) {
+    stop(seedstackDir, iteration, "blocked", "commit_head_mismatch_before_auto_commit", {
+      seed,
+      expected_head: expectedHead,
+      actual_head: headBefore,
     });
   }
   const paths = commitCandidatePaths(dirty);
@@ -1695,8 +1765,17 @@ function createPerSeedCommit(seedstackDir: string, iteration: number, seed: stri
     }
     runGit(["commit", "-m", `seedstack: close ${seed}`]);
     const commit = runGit(["rev-parse", "HEAD"]).stdout;
-    appendCommitLedger(seedstackDir, seed, commit, dirtyPath);
-    return commit;
+    const metadata: PerSeedCommitMetadata = {
+      commit,
+      worktreeRoot: currentWorktreeRoot(),
+      branch: currentBranch(),
+      headBefore,
+      headAfter: commit,
+      gitCommonDir: currentGitCommonDir(),
+      changedPathAllowlist: paths,
+    };
+    appendCommitLedger(seedstackDir, seed, dirtyPath, metadata);
+    return metadata;
   } catch (error) {
     runGit(["reset", "-q", "--", ...paths], true);
     stop(seedstackDir, iteration, "blocked", "auto_commit_failed", {
@@ -2505,9 +2584,11 @@ async function runLoop(): Promise<never> {
         if (!dirty) stop(seedstackDir, iteration, "blocked", "commit_reconcile_missing_dirty", { seed, reconcile: latestArtifactPath(commitReconcile) });
         const dirtyPath = writeLoopJson(seedstackDir, iteration, `commit-dirty-${seed}`, dirty);
         stopOnUnexpectedDirty(seedstackDir, iteration, seed, { ...dirty, __path: dirtyPath }, "unexpected_dirty_before_commit");
+        const headBeforeCommit = currentHead();
         const pendingPath = writeLoopJson(seedstackDir, iteration, `latest-dispatch-pending-${seed}`, {
           status: "closed_clean",
           commit_pending: true,
+          head_before: headBeforeCommit,
         });
         updateRunState(seedstackDir, iteration, "managing", [
           "--seed",
@@ -2521,10 +2602,13 @@ async function runLoop(): Promise<never> {
           "--latest-dispatch-file",
           pendingPath,
         ]);
-        const commit = createPerSeedCommit(seedstackDir, iteration, seed, dirtyPath, dirty);
+        const commitMetadata = createPerSeedCommit(seedstackDir, iteration, seed, dirtyPath, dirty);
         const committedPath = writeLoopJson(seedstackDir, iteration, `latest-dispatch-committed-${seed}`, {
           status: "closed_clean",
           commit_pending: false,
+          head_before: commitMetadata.headBefore,
+          head_after: commitMetadata.headAfter,
+          changed_path_allowlist: commitMetadata.changedPathAllowlist,
         });
         updateRunState(seedstackDir, iteration, "managing", [
           "--seed",
@@ -2532,11 +2616,11 @@ async function runLoop(): Promise<never> {
           "--decision",
           "committed",
           "--rationale",
-          `per-seed commit ${commit} recorded`,
+          `per-seed commit ${commitMetadata.commit} recorded`,
           "--latest-dispatch-file",
           committedPath,
           "--commit",
-          commit,
+          commitMetadata.commit,
         ]);
         const ledger = runJson(seedstackDir, iteration, `commit-ledger-${seed}`, checkerPath("check-commit-ledger.ts"), [
           "--repo",
@@ -2547,16 +2631,16 @@ async function runLoop(): Promise<never> {
           statePath(seedstackDir),
           "--seed",
           seed,
-        "--commit",
-        commit,
-        "--commit-policy",
-        "per_seed",
-        ...expectedSeedPaths.flatMap((path) => ["--expected-path", path]),
-        "--pretty",
-      ], true);
-        emit(seedstackDir, "commit_ledger_check", { seed, ok: ok(ledger), decision: decision(ledger), commit, path: latestArtifactPath(ledger) });
+          "--commit",
+          commitMetadata.commit,
+          "--commit-policy",
+          "per_seed",
+          ...expectedSeedPaths.flatMap((path) => ["--expected-path", path]),
+          "--pretty",
+        ], true);
+        emit(seedstackDir, "commit_ledger_check", { seed, ok: ok(ledger), decision: decision(ledger), commit: commitMetadata.commit, path: latestArtifactPath(ledger) });
         if (!ok(ledger) || decision(ledger) !== "ledger_ready") {
-          stop(seedstackDir, iteration, "blocked", "commit_ledger_blocked", { seed, commit, ledger: latestArtifactPath(ledger) });
+          stop(seedstackDir, iteration, "blocked", "commit_ledger_blocked", { seed, commit: commitMetadata.commit, ledger: latestArtifactPath(ledger) });
         }
         commitCheckPath = latestArtifactPath(ledger);
         if (dashboardCurrentTiming) dashboardCurrentTiming.commit_ms = Date.now() - dashboardPhaseStartedAt;
