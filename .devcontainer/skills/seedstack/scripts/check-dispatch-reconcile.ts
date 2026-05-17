@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { preflightRepo, type WorktreePolicy } from "./worktree-preflight.ts";
 
 type Finding = {
   code: string;
@@ -51,6 +52,7 @@ type CommandRecord = {
 
 type Options = {
   repo: string;
+  worktreePolicy: WorktreePolicy;
   seed?: string;
   dispatchRoot: string;
   round?: string;
@@ -136,6 +138,7 @@ function requireValue(args: string[], index: number, flag: string): string {
 function parseArgs(argv: string[]): Options {
   const options: Options = {
     repo: process.cwd(),
+    worktreePolicy: "linked-ok",
     dispatchRoot: "tmp/dispatch-work",
     commitPolicy: "none",
     validationPolicy: "strict",
@@ -167,6 +170,17 @@ function parseArgs(argv: string[]): Options {
         break;
       case "--repo":
         options.repo = take();
+        break;
+      case "--worktree-policy": {
+        const policy = take();
+        if (policy !== "linked-ok" && policy !== "allow-same-branch") {
+          throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+        }
+        options.worktreePolicy = policy;
+        break;
+      }
+      case "--allow-same-branch-worktree":
+        options.worktreePolicy = "allow-same-branch";
         break;
       case "--seed":
         options.seed = take();
@@ -218,6 +232,13 @@ function parseArgs(argv: string[]): Options {
         break;
       default:
         if (arg.startsWith("--repo=")) options.repo = arg.slice("--repo=".length);
+        else if (arg.startsWith("--worktree-policy=")) {
+          const policy = arg.slice("--worktree-policy=".length);
+          if (policy !== "linked-ok" && policy !== "allow-same-branch") {
+            throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+          }
+          options.worktreePolicy = policy;
+        }
         else if (arg.startsWith("--seed=")) options.seed = arg.slice("--seed=".length);
         else if (arg.startsWith("--dispatch-root=")) options.dispatchRoot = arg.slice("--dispatch-root=".length);
         else if (arg.startsWith("--round=")) options.round = arg.slice("--round=".length);
@@ -244,7 +265,12 @@ function parseArgs(argv: string[]): Options {
     }
   }
 
-  options.repo = resolve(options.repo);
+  options.repo = preflightRepo({
+    repoInput: options.repo,
+    cwd: process.cwd(),
+    policy: options.worktreePolicy ?? "linked-ok",
+    requireWorktree: false,
+  }).repo;
   return options;
 }
 
@@ -328,6 +354,8 @@ function runDirty(options: Options): { dirty: DirtyResult; command: CommandRecor
     DIRTY_CLASSIFIER,
     "--repo",
     options.repo,
+    "--worktree-policy",
+    options.worktreePolicy ?? "linked-ok",
     "--seed",
     options.seed ?? "",
     "--dispatch-dir",

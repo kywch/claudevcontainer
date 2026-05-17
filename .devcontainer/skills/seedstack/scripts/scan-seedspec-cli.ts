@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Deterministic read-only work queue CLI scan normalizer.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -773,6 +773,11 @@ function assertSelf(name: string, condition: boolean, detail?: unknown): void {
   if (!condition) throw new Error(`self-test failed: ${name}${detail === undefined ? "" : ` ${JSON.stringify(detail)}`}`);
 }
 
+function runGitSelf(cwd: string, args: string[]): void {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8", maxBuffer: 5 * 1024 * 1024 });
+  assertSelf(`git ${args.join(" ")}`, (result.status ?? 1) === 0, result.stderr || result.stdout);
+}
+
 function selfTest(pretty: boolean): Scan {
   const dir = mkdtempSync(join(tmpdir(), "seedstack-scan-"));
   try {
@@ -868,6 +873,58 @@ function selfTest(pretty: boolean): Scan {
     const parseBlocker = invalidJson.blockers.find((finding) => finding.code === "command_parse_error");
     assertSelf("invalid json command blocks", Boolean(parseBlocker), invalidJson.blockers);
     assertSelf("invalid json preserves command", invalidJson.commands.some((command) => command.name === "list"), invalidJson.commands);
+
+    const repo = join(dir, "repo");
+    const linked = join(dir, "linked");
+    mkdirSync(repo, { recursive: true });
+    runGitSelf(repo, ["init", "-b", "main"]);
+    runGitSelf(repo, ["config", "user.email", "seedstack@example.test"]);
+    runGitSelf(repo, ["config", "user.name", "Seedstack Test"]);
+    writeFileSync(join(repo, "README.md"), "seedstack\n");
+    runGitSelf(repo, ["add", "README.md"]);
+    runGitSelf(repo, ["commit", "-m", "init"]);
+    runGitSelf(repo, ["worktree", "add", "-b", "scan-wt", linked]);
+    mkdirSync(join(linked, ".seeds"), { recursive: true });
+    writeJson(join(linked, "adoption-selection.json"), { adopted_seed_ids: ["seed-a"], excluded_open_seed_ids: [] });
+    const cliLog = join(dir, "seed-cli-log.jsonl");
+    const fakeCli = join(dir, "fake-seed-cli");
+    writeFileSync(
+      fakeCli,
+      `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const [command] = process.argv.slice(2);
+appendFileSync(${JSON.stringify(cliLog)}, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }) + "\\n");
+const issue = { id: "seed-a", status: "open", labels: [], priority: 1, createdAt: "2026-01-01T00:00:00Z" };
+const data = command === "health"
+  ? { checks: [], summary: { error: 0, pass: 1, warning: 0 } }
+  : command === "blocked"
+    ? { count: 0, issues: [] }
+    : { count: 1, issues: [issue] };
+process.stdout.write(JSON.stringify({ ok: true, command, data }) + "\\n");
+`,
+    );
+    chmodSync(fakeCli, 0o755);
+    const linkedOptions = parseArgs([
+      "--repo",
+      linked,
+      "--cli",
+      fakeCli,
+      "--adoption-selection",
+      "adoption-selection.json",
+    ]);
+    const linkedScan = classify(linkedOptions);
+    assertSelf("linked scan ok", linkedScan.ok, linkedScan.blockers);
+    assertSelf("scan repo is linked worktree", linkedScan.repo === linked, linkedScan.repo);
+    assertSelf("scan records linked worktree", linkedScan.worktree_preflight.linked, linkedScan.worktree_preflight);
+    assertSelf("scan records configured seed cli", linkedScan.cli === fakeCli, linkedScan.cli);
+    assertSelf("scan commands record configured seed cli argv", linkedScan.commands.every((command) => command.argv[0] === fakeCli), linkedScan.commands);
+    const cliRuns = readFileSync(cliLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as JsonObject);
+    assertSelf("seed cli ran in linked worktree", cliRuns.length === 4 && cliRuns.every((run) => run.cwd === linked), cliRuns);
+    assertSelf(
+      "seed cli argv proves configured command invocation",
+      cliRuns.every((run) => Array.isArray(run.argv) && run.argv[1] === "--json"),
+      cliRuns,
+    );
 
     return happy;
   } finally {

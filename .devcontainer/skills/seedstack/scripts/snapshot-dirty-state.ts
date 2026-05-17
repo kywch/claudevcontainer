@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { preflightRepo, type WorktreePolicy } from "./worktree-preflight.ts";
 
 export const DIRTY_STATE_SNAPSHOT_CONTRACT = "dirty_state_snapshot.v1";
 
@@ -20,6 +21,7 @@ export type DirtyStateSnapshot = {
 
 type Options = {
   repo: string;
+  worktreePolicy: WorktreePolicy;
   output?: string;
   pretty: boolean;
   selfTest: boolean;
@@ -43,7 +45,7 @@ function requireValue(args: string[], index: number, flag: string): string {
 }
 
 function parseArgs(argv: string[]): Options {
-  const options: Options = { repo: process.cwd(), pretty: false, selfTest: false };
+  const options: Options = { repo: process.cwd(), worktreePolicy: "linked-ok", pretty: false, selfTest: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "-h" || arg === "--help") usage(0);
@@ -64,6 +66,23 @@ function parseArgs(argv: string[]): Options {
       options.repo = arg.slice("--repo=".length);
       continue;
     }
+    if (arg === "--worktree-policy") {
+      const policy = requireValue(argv, index, arg);
+      if (policy !== "linked-ok" && policy !== "allow-same-branch") throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+      options.worktreePolicy = policy;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--worktree-policy=")) {
+      const policy = arg.slice("--worktree-policy=".length);
+      if (policy !== "linked-ok" && policy !== "allow-same-branch") throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+      options.worktreePolicy = policy;
+      continue;
+    }
+    if (arg === "--allow-same-branch-worktree") {
+      options.worktreePolicy = "allow-same-branch";
+      continue;
+    }
     if (arg === "--output") {
       options.output = requireValue(argv, index, arg);
       index += 1;
@@ -75,7 +94,13 @@ function parseArgs(argv: string[]): Options {
     }
     throw new Error(`unknown argument ${arg}`);
   }
-  return { ...options, repo: resolve(options.repo) };
+  const preflight = preflightRepo({
+    repoInput: options.repo,
+    cwd: process.cwd(),
+    policy: options.worktreePolicy,
+    requireWorktree: false,
+  });
+  return { ...options, repo: preflight.repo };
 }
 
 export function parsePorcelainPaths(statusText: string): DirtyStateSnapshot["paths"] {

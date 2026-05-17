@@ -432,16 +432,20 @@ setInterval(() => {}, 1000);
     assertSelfTest(isObject(partialResult) && partialResult.blocked_reason === "manage_child_silent_timeout", "partial result overwritten by timeout");
 
     const resultReadyCodex = join(tmp, "result-ready-codex");
+    const linkedWorktree = join(tmp, "linked-worktree");
+    const launchRecord = join(tmp, "result-ready-launch.json");
+    mkdirSync(linkedWorktree, { recursive: true });
     writeFileSync(
       resultReadyCodex,
       `#!/usr/bin/env bun
-import { writeFileSync } from "node:fs";
-const result = process.env.SEEDSTACK_RESULT_FILE;
-if (!result) process.exit(2);
-writeFileSync(result, JSON.stringify({
-  contract: "seedstack_child_result.v1",
-  ok: true,
-  role: "dispatch",
+	import { writeFileSync } from "node:fs";
+	const result = process.env.SEEDSTACK_RESULT_FILE;
+	if (!result) process.exit(2);
+	writeFileSync(${JSON.stringify(launchRecord)}, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }, null, 2) + "\\n");
+	writeFileSync(result, JSON.stringify({
+	  contract: "seedstack_child_result.v1",
+	  ok: true,
+	  role: "dispatch",
   seed: "seed-test-ready",
   decision: "blocked",
   followups_requested: 0,
@@ -460,12 +464,18 @@ setInterval(() => {}, 1000);
       "seed-test-ready",
       "self-test prompt",
       resultReadyFile,
-      { ...baseOptions, codexBin: resultReadyCodex, childSilentTimeoutMs: 5000 },
+      { ...baseOptions, repo: linkedWorktree, codexBin: resultReadyCodex, childSilentTimeoutMs: 5000 },
       emit,
     );
     assertSelfTest(resultReadyChild.completedByResult === true, "result-ready child returned");
     assertSelfTest(resultReadyChild.timeout === undefined, "result-ready child did not timeout");
     assertSelfTest(resultReadyChild.result?.blocked_reason === "self_test_done", "result-ready child cached result");
+    const launchArgs = readJson(launchRecord);
+    assertSelfTest(isObject(launchArgs) && launchArgs.cwd === linkedWorktree, "child cwd uses normalized worktree repo");
+    assertSelfTest(
+      isObject(launchArgs) && Array.isArray(launchArgs.argv) && launchArgs.argv.includes("-C") && launchArgs.argv.includes(linkedWorktree),
+      "codex child -C uses normalized worktree repo",
+    );
 
     const legacyManageFile = resultPath(seedstackDir, "manage", "seed-test-legacy", 6);
     writeJson(legacyManageFile, {

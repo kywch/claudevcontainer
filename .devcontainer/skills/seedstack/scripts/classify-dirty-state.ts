@@ -7,6 +7,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve, relative } from "node:path";
 import { readDirtyStatusText } from "./snapshot-dirty-state.ts";
+import { preflightRepo, type WorktreePolicy } from "./worktree-preflight.ts";
 
 type Classification =
   | "preexisting_user"
@@ -25,6 +26,7 @@ type StatusPath = {
 
 type Options = {
   repo: string;
+  worktreePolicy: WorktreePolicy;
   seed?: string;
   dispatchDir?: string;
   seedstackDir?: string;
@@ -76,6 +78,7 @@ function requireValue(args: string[], index: number, flag: string): string {
 function parseArgs(argv: string[]): Options {
   const options: Options = {
     repo: process.cwd(),
+    worktreePolicy: "linked-ok",
     expectedSeeds: [],
     preexisting: [],
     dirtyPolicy: "strict",
@@ -124,6 +127,27 @@ function parseArgs(argv: string[]): Options {
     }
     if (arg.startsWith("--repo=")) {
       options.repo = arg.slice("--repo=".length);
+      continue;
+    }
+    if (arg === "--worktree-policy") {
+      const policy = requireValue(argv, index, arg);
+      if (policy !== "linked-ok" && policy !== "allow-same-branch") {
+        throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+      }
+      options.worktreePolicy = policy;
+      index++;
+      continue;
+    }
+    if (arg.startsWith("--worktree-policy=")) {
+      const policy = arg.slice("--worktree-policy=".length);
+      if (policy !== "linked-ok" && policy !== "allow-same-branch") {
+        throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+      }
+      options.worktreePolicy = policy;
+      continue;
+    }
+    if (arg === "--allow-same-branch-worktree") {
+      options.worktreePolicy = "allow-same-branch";
       continue;
     }
     if (arg === "--seed") {
@@ -191,7 +215,12 @@ function parseArgs(argv: string[]): Options {
     }
     throw new Error(`unknown argument ${arg}`);
   }
-  options.repo = resolve(options.repo);
+  options.repo = preflightRepo({
+    repoInput: options.repo,
+    cwd: process.cwd(),
+    policy: options.worktreePolicy,
+    requireWorktree: false,
+  }).repo;
   if (!options.dispatchDir && options.seed) {
     options.dispatchDir = `tmp/dispatch-work/${options.seed}`;
   }

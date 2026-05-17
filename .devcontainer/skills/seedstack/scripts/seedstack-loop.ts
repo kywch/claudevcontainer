@@ -1599,6 +1599,8 @@ function reconcileDispatchToManage(seedstackDir: string, iteration: number, seed
     : runJson(seedstackDir, iteration, `reconcile-${seed}`, checkerPath("check-dispatch-reconcile.ts"), [
       "--repo",
       optionsGlobal.repo,
+      "--worktree-policy",
+      optionsGlobal.worktreePolicy,
       "--seed",
       seed,
       "--commit-policy",
@@ -1687,6 +1689,8 @@ function snapshotDirtyState(seedstackDir: string, iteration: number, label: stri
   return runJson(seedstackDir, iteration, label, checkerPath("snapshot-dirty-state.ts"), [
     "--repo",
     optionsGlobal.repo,
+    "--worktree-policy",
+    optionsGlobal.worktreePolicy,
     "--pretty",
   ], true);
 }
@@ -1962,6 +1966,8 @@ async function runLoop(): Promise<never> {
       const preDirty = runJson(seedstackDir, iteration, `pre-manage-dirty-${seed}`, checkerPath("classify-dirty-state.ts"), [
         "--repo",
         optionsGlobal.repo,
+        "--worktree-policy",
+        optionsGlobal.worktreePolicy,
         "--seedstack-dir",
         seedstackDir,
         "--dispatch-dir",
@@ -2043,6 +2049,8 @@ async function runLoop(): Promise<never> {
         const retryDirty = runJson(seedstackDir, retryIteration, `retry-dirty-${seed}`, checkerPath("classify-dirty-state.ts"), [
           "--repo",
           optionsGlobal.repo,
+          "--worktree-policy",
+          optionsGlobal.worktreePolicy,
           "--seedstack-dir",
           seedstackDir,
           "--dispatch-dir",
@@ -2113,6 +2121,8 @@ async function runLoop(): Promise<never> {
         const commitReconcile = runJson(seedstackDir, iteration, `commit-reconcile-${seed}`, checkerPath("check-dispatch-reconcile.ts"), [
           "--repo",
           optionsGlobal.repo,
+          "--worktree-policy",
+          optionsGlobal.worktreePolicy,
           "--seed",
           seed,
           "--commit-policy",
@@ -2300,6 +2310,8 @@ async function runLoop(): Promise<never> {
     const dirty = runJson(seedstackDir, iteration, "dirty", checkerPath("classify-dirty-state.ts"), [
       "--repo",
       optionsGlobal.repo,
+      "--worktree-policy",
+      optionsGlobal.worktreePolicy,
       "--seedstack-dir",
       seedstackDir,
       "--dispatch-dir",
