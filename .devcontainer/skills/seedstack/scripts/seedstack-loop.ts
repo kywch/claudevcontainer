@@ -5,8 +5,8 @@
 // one dispatch or manage step, then enforces the outer state machine with the
 // existing deterministic Seedstack checkers.
 
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -90,6 +90,26 @@ type LoopState = {
   total_followups: number;
   baseline_seed_count: number;
   skipped_seeds: Array<{ seed: string; reason: string; at: string; loop_cap?: string }>;
+};
+
+type QueueOperation = {
+  op_type: string;
+  target_seed: string;
+  rationale: string;
+  source_artifact_refs: string[];
+  expected_preconditions: string[];
+  details: JsonObject;
+  index: number;
+};
+
+type QueueOperationCommand = {
+  op_type: string;
+  target_seed: string;
+  argv: string[];
+  cwd: string;
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
 };
 
 const HELP = `seedstack-loop.ts seedstack_loop.v1
@@ -499,6 +519,10 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+function exactStringArray(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : null;
+}
+
 function pathEntries(value: unknown): Array<{ path: string; classification: string }> {
   if (!Array.isArray(value)) return [];
   return value.filter(isObject).flatMap((item) => {
@@ -544,6 +568,220 @@ function queueDirtyPaths(): string[] {
 
 function proposedQueueOperations(result: ChildResult): JsonObject[] {
   return Array.isArray(result.proposed_queue_operations) ? result.proposed_queue_operations.filter(isObject) : [];
+}
+
+function normalizeQueueOperation(value: JsonObject, index: number): QueueOperation | { error: string; detail?: unknown } {
+  const opType = stringField(value.op_type);
+  const targetSeed = stringField(value.target_seed);
+  const rationale = stringField(value.rationale);
+  if (!opType) return { error: "missing_op_type", detail: value };
+  if (!targetSeed) return { error: "missing_target_seed", detail: value };
+  if (!rationale) return { error: "missing_rationale", detail: value };
+  const sourceArtifactRefs = exactStringArray(value.source_artifact_refs);
+  if (!sourceArtifactRefs) return { error: "invalid_source_artifact_refs", detail: value.source_artifact_refs };
+  const expectedPreconditions = exactStringArray(value.expected_preconditions);
+  if (!expectedPreconditions) return { error: "invalid_expected_preconditions", detail: value.expected_preconditions };
+  return {
+    op_type: opType,
+    target_seed: targetSeed,
+    rationale,
+    source_artifact_refs: sourceArtifactRefs,
+    expected_preconditions: expectedPreconditions,
+    details: isObject(value.details) ? value.details : {},
+    index,
+  };
+}
+
+function scanIssueById(scan: JsonObject, id: string): JsonObject | null {
+  const issues = Array.isArray(scan.issues) ? scan.issues : [];
+  for (const issue of issues) {
+    if (isObject(issue) && issue.id === id) return issue;
+  }
+  return null;
+}
+
+function validateQueueOperationPreconditions(op: QueueOperation, seed: string, preScan: JsonObject, reconcilePath: string): string[] {
+  const blockers: string[] = [];
+  const supported = new Set(["close-current", "create-follow-up", "add-dependency", "adjust-labels", "no-op"]);
+  if (!supported.has(op.op_type)) blockers.push(`unsupported operation ${op.op_type}`);
+  const target = op.op_type === "create-follow-up" ? null : scanIssueById(preScan, op.target_seed);
+  if (op.op_type === "close-current" && op.target_seed !== seed) {
+    blockers.push(`close-current target ${op.target_seed} is not current seed ${seed}`);
+  }
+  if (op.op_type === "close-current" && target && stringField(target.status) === "closed") {
+    blockers.push(`close-current target ${op.target_seed} is closed in fresh scan`);
+  }
+  if (op.op_type === "close-current" && target && stringField(target.status) !== "open") {
+    blockers.push(`close-current target ${op.target_seed} is not open in fresh scan`);
+  }
+  if (op.op_type !== "create-follow-up" && !target) {
+    if (!target) blockers.push(`target seed ${op.target_seed} not present in fresh scan`);
+  }
+  for (const ref of op.source_artifact_refs) {
+    const absolute = isAbsolute(ref) ? ref : resolve(optionsGlobal.repo, ref);
+    if (!existsSync(absolute)) blockers.push(`source artifact missing: ${ref}`);
+  }
+  for (const precondition of op.expected_preconditions) {
+    const lower = precondition.toLowerCase();
+    if (lower.includes("still open")) {
+      const match = /\bseed\s+([A-Za-z0-9._-]+)\s+is\s+still\s+open\b/i.exec(precondition);
+      const targetId = match?.[1] ?? op.target_seed;
+      const target = scanIssueById(preScan, targetId);
+      if (!target) blockers.push(`precondition target ${targetId} missing from fresh scan`);
+      else if (stringField(target.status) === "closed") blockers.push(`precondition target ${targetId} is closed`);
+    } else if (lower.includes("dispatch reconcile result") || lower.includes("reconcile")) {
+      if (!existsSync(reconcilePath)) blockers.push(`reconcile artifact missing: ${reconcilePath}`);
+    } else {
+      blockers.push(`unsupported precondition: ${precondition}`);
+    }
+  }
+  return blockers;
+}
+
+function buildQueueOperationArgv(op: QueueOperation): string[] | { error: string } {
+  switch (op.op_type) {
+    case "no-op":
+      return [];
+    case "close-current":
+      return [optionsGlobal.seedCli, "close", op.target_seed, "--json"];
+    case "create-follow-up": {
+      const title = stringField(op.details.title);
+      if (!title) return { error: "create-follow-up requires details.title" };
+      const argv = [optionsGlobal.seedCli, "create", "--title", title, "--type", stringField(op.details.type) ?? "task"];
+      if (typeof op.details.priority === "number" && Number.isFinite(op.details.priority)) {
+        argv.push("--priority", String(op.details.priority));
+      }
+      const labels = stringArray(op.details.labels);
+      if (labels.length > 0) argv.push("--labels", labels.join(","));
+      const description = stringField(op.details.description) ?? stringField(op.details.body);
+      if (description) argv.push("--description", description);
+      argv.push("--json");
+      return argv;
+    }
+    case "add-dependency": {
+      const dependsOn = stringField(op.details.depends_on) ?? stringField(op.details.dependency) ?? stringField(op.details.blocked_by);
+      if (!dependsOn) return { error: "add-dependency requires details.depends_on" };
+      return [optionsGlobal.seedCli, "dep", "add", op.target_seed, dependsOn, "--json"];
+    }
+    case "adjust-labels": {
+      const add = stringArray(op.details.add);
+      const remove = stringArray(op.details.remove);
+      if (add.length === 0 && remove.length === 0) return { error: "adjust-labels requires details.add or details.remove" };
+      const argv = [optionsGlobal.seedCli, "update", op.target_seed];
+      for (const label of add) argv.push("--add-label", label);
+      for (const label of remove) argv.push("--remove-label", label);
+      argv.push("--json");
+      return argv;
+    }
+    default:
+      return { error: `unsupported operation ${op.op_type}` };
+  }
+}
+
+function runQueueOperationCommand(op: QueueOperation, argv: string[]): QueueOperationCommand {
+  if (argv.length === 0) {
+    return { op_type: op.op_type, target_seed: op.target_seed, argv, cwd: optionsGlobal.repo, exit_code: 0, stdout: "", stderr: "" };
+  }
+  const proc: SpawnSyncReturns<string> = spawnSync(argv[0], argv.slice(1), {
+    cwd: optionsGlobal.repo,
+    encoding: "utf8",
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  return {
+    op_type: op.op_type,
+    target_seed: op.target_seed,
+    argv,
+    cwd: optionsGlobal.repo,
+    exit_code: proc.status,
+    stdout: (proc.stdout || "").trim(),
+    stderr: (proc.stderr || proc.error?.message || "").trim(),
+  };
+}
+
+function applyManageQueueOperations(
+  seedstackDir: string,
+  iteration: number,
+  seed: string,
+  childPreScan: JsonObject,
+  reconcilePath: string,
+  proposals: JsonObject[],
+): JsonObject {
+  const preApplyScan = runScan(seedstackDir, iteration, `pre-apply-queue-scan-${seed}`);
+  if (!ok(preApplyScan)) {
+    return {
+      contract: "manage_queue_operations.v1",
+      ok: false,
+      seed,
+      proposal_count: proposals.length,
+      applied_count: 0,
+      blockers: ["fresh queue scan failed before applying proposed operations"],
+      before_seed_ids: [],
+      after_seed_ids: [],
+      queue_dirty_paths: queueDirtyPaths(),
+      planned_commands: [],
+      commands: [],
+      scans: {
+        child_pre_manage_scan: latestArtifactPath(childPreScan),
+        pre_apply_scan: latestArtifactPath(preApplyScan),
+      },
+    };
+  }
+  const normalized: QueueOperation[] = [];
+  const blockers: string[] = [];
+  proposals.forEach((proposal, index) => {
+    const op = normalizeQueueOperation(proposal, index);
+    if ("error" in op) {
+      blockers.push(`proposal ${index}: ${op.error}`);
+      return;
+    }
+    normalized.push(op);
+    blockers.push(...validateQueueOperationPreconditions(op, seed, preApplyScan, reconcilePath).map((item) => `proposal ${index}: ${item}`));
+  });
+  const beforeIds = scanListIds(preApplyScan);
+  const commands: QueueOperationCommand[] = [];
+  const plannedArgv: Array<{ op_type: string; target_seed: string; argv: string[] }> = [];
+  for (const op of normalized) {
+    const argv = buildQueueOperationArgv(op);
+    if ("error" in argv) blockers.push(`proposal ${op.index}: ${argv.error}`);
+    else plannedArgv.push({ op_type: op.op_type, target_seed: op.target_seed, argv });
+  }
+  const mutatingCommands = plannedArgv.filter((command) => command.argv.length > 0);
+  if (mutatingCommands.length > 1) {
+    blockers.push("multiple mutating queue operations are not applied in one manage step; split proposals to avoid partial queue mutation");
+  }
+  if (blockers.length === 0) {
+    for (let index = 0; index < normalized.length; index += 1) {
+      const op = normalized[index];
+      const argv = plannedArgv[index]?.argv ?? [];
+      const command = runQueueOperationCommand(op, argv);
+      commands.push(command);
+      if (command.exit_code !== 0) {
+        blockers.push(`proposal ${op.index}: seed-cli command failed exit=${command.exit_code}`);
+        break;
+      }
+    }
+  }
+  const queueDirty = queueDirtyPaths();
+  const afterScan = blockers.length === 0 || commands.length > 0 ? runScan(seedstackDir, iteration, `post-queue-ops-scan-${seed}`) : null;
+  return {
+    contract: "manage_queue_operations.v1",
+    ok: blockers.length === 0,
+    seed,
+    proposal_count: proposals.length,
+    applied_count: commands.length,
+    partial_applied: blockers.length > 0 && commands.length > 0,
+    blockers,
+    before_seed_ids: beforeIds,
+    after_seed_ids: afterScan ? scanListIds(afterScan) : beforeIds,
+    queue_dirty_paths: queueDirty,
+    planned_commands: plannedArgv,
+    commands,
+    scans: {
+      child_pre_manage_scan: latestArtifactPath(childPreScan),
+      pre_apply_scan: latestArtifactPath(preApplyScan),
+      ...(afterScan ? { post_apply_scan: latestArtifactPath(afterScan) } : {}),
+    },
+  };
 }
 
 function beforeFirstDispatch(runState: JsonObject): boolean {
@@ -2031,6 +2269,101 @@ async function runLoop(): Promise<never> {
           queue_dirty_paths: postManageQueueDirtyPaths,
         });
       }
+      if (childResult.decision === "blocked") {
+        emit(seedstackDir, "manage_result", {
+          seed,
+          decision: childResult.decision,
+          requested_followups: Math.max(followupCount(childResult), 0),
+          observed_creates: 0,
+          adopted_growth: Math.max(0, adoptedCountFromManifest(optionsGlobal.adoptionSelection) - loopState.baseline_seed_count),
+          result_path: resultFile,
+        });
+        stop(seedstackDir, iteration, "blocked", stringField(childResult.blocked_reason) ?? "manage_blocked", { seed });
+      }
+      const proposedRequested = followupCount(childResult);
+      if (proposedRequested > optionsGlobal.followupsPerManage) {
+        emit(seedstackDir, "manage_result", {
+          seed,
+          decision: childResult.decision ?? null,
+          requested_followups: proposedRequested,
+          observed_creates: 0,
+          adopted_growth: Math.max(0, adoptedCountFromManifest(optionsGlobal.adoptionSelection) - loopState.baseline_seed_count),
+          result_path: resultFile,
+        });
+        stop(seedstackDir, iteration, "loop_cap", "followups_per_manage_cap", {
+          seed,
+          requested: proposedRequested,
+          cap: optionsGlobal.followupsPerManage,
+        });
+      }
+      if (loopState.total_followups + proposedRequested > optionsGlobal.followupCap) {
+        emit(seedstackDir, "manage_result", {
+          seed,
+          decision: childResult.decision ?? null,
+          requested_followups: proposedRequested,
+          observed_creates: 0,
+          adopted_growth: Math.max(0, adoptedCountFromManifest(optionsGlobal.adoptionSelection) - loopState.baseline_seed_count),
+          result_path: resultFile,
+        });
+        stop(seedstackDir, iteration, "loop_cap", "followup_growth_cap", {
+          seed,
+          requested: proposedRequested,
+          total_followups: loopState.total_followups,
+          cap: optionsGlobal.followupCap,
+        });
+      }
+      if (latestDispatchNonclosed(runState) && childResult.decision !== "retry_same_seed") {
+        emit(seedstackDir, "manage_result", {
+          seed,
+          decision: childResult.decision ?? null,
+          requested_followups: proposedRequested,
+          observed_creates: 0,
+          adopted_growth: Math.max(0, adoptedCountFromManifest(optionsGlobal.adoptionSelection) - loopState.baseline_seed_count),
+          result_path: resultFile,
+        });
+        stop(seedstackDir, iteration, "blocked", "manage_nonclosed_continue_blocked", {
+          seed,
+          manage_decision: childResult.decision ?? null,
+        });
+      }
+      const shouldApplyQueueOps = childResult.decision === "continue_other_seeds" || childResult.decision === "done";
+      const hasNonNoopProposal = proposedOps.some((proposal) => stringField(proposal.op_type) !== "no-op");
+      if (shouldApplyQueueOps) {
+        const queueOps = applyManageQueueOperations(seedstackDir, iteration, seed, preScan, reconcilePath, proposedOps);
+        const queueOpsPath = writeLoopJson(seedstackDir, iteration, `manage-queue-ops-${seed}`, queueOps);
+        emit(seedstackDir, "manage_queue_operations", {
+          seed,
+          ok: ok(queueOps),
+          applied_count: typeof queueOps.applied_count === "number" ? queueOps.applied_count : 0,
+          path: queueOpsPath,
+        });
+        if (!ok(queueOps)) {
+          stop(seedstackDir, iteration, "blocked", "manage_queue_operation_precondition_failed", {
+            seed,
+            queue_operations: queueOpsPath,
+            blockers: stringArray(queueOps.blockers),
+          });
+        }
+      } else if (hasNonNoopProposal) {
+        const queueOpsPath = writeLoopJson(seedstackDir, iteration, `manage-queue-ops-${seed}`, {
+          contract: "manage_queue_operations.v1",
+          ok: false,
+          seed,
+          proposal_count: proposedOps.length,
+          applied_count: 0,
+          blockers: [`manage decision ${String(childResult.decision)} cannot apply queue mutations`],
+          before_seed_ids: scanListIds(preScan),
+          after_seed_ids: scanListIds(preScan),
+          queue_dirty_paths: queueDirtyPaths(),
+          planned_commands: [],
+          commands: [],
+        });
+        stop(seedstackDir, iteration, "blocked", "manage_queue_operation_precondition_failed", {
+          seed,
+          queue_operations: queueOpsPath,
+          blockers: [`manage decision ${String(childResult.decision)} cannot apply queue mutations`],
+        });
+      }
       const postScan = runScan(seedstackDir, iteration, `post-manage-scan-${seed}`);
       if (!ok(postScan)) stop(seedstackDir, iteration, "blocked", "scan_failed_after_manage", { seed, scan: latestArtifactPath(postScan) });
       const observedCreates = setDifference(scanListIds(postScan), scanListIds(preScan)).length;
@@ -2061,15 +2394,6 @@ async function runLoop(): Promise<never> {
         total_followups: Math.max(loopState.total_followups + requested, adoptedGrowth),
       };
       saveLoopState(seedstackDir, nextLoopState);
-      if (childResult.decision === "blocked") {
-        stop(seedstackDir, iteration, "blocked", stringField(childResult.blocked_reason) ?? "manage_blocked", { seed });
-      }
-      if (latestDispatchNonclosed(runState) && childResult.decision !== "retry_same_seed" && childResult.decision !== "blocked") {
-        stop(seedstackDir, iteration, "blocked", "manage_nonclosed_continue_blocked", {
-          seed,
-          manage_decision: childResult.decision ?? null,
-        });
-      }
       if (childResult.decision === "retry_same_seed") {
         const retryAllocation = allocateSupervisorIteration(seedstackDir);
         const retryIteration = retryAllocation.iteration;
@@ -2685,6 +3009,157 @@ function runLoopDirtyGuardPolicyFixtureSelfTest(): void {
   }
 }
 
+function runManageQueueOpsSelfTest(): void {
+  const root = mkdtempSync(join(tmpdir(), "seedstack-queue-ops-"));
+  const previousOptions = optionsGlobal;
+  try {
+    const repo = join(root, "repo");
+    const seedstackDir = join(root, "stack");
+    const adoptionSelection = join(root, "adoption-selection.json");
+    const stateFile = join(root, "queue-state.json");
+    const cliLog = join(root, "seed-cli-log.jsonl");
+    const fakeCli = join(root, "fake-seed-cli");
+    mkdirSync(join(repo, ".seeds"), { recursive: true });
+    mkdirSync(seedstackDir, { recursive: true });
+    runGitSelfTest(repo, ["init", "-b", "main"]);
+    runGitSelfTest(repo, ["config", "user.email", "seedstack@example.test"]);
+    runGitSelfTest(repo, ["config", "user.name", "Seedstack Test"]);
+    writeJson(join(repo, ".seeds", "issues.jsonl"), { seed: "seed-test", status: "open" });
+    runGitSelfTest(repo, ["add", ".seeds/issues.jsonl"]);
+    runGitSelfTest(repo, ["commit", "-m", "seed init"]);
+    writeJson(adoptionSelection, { adopted_seed_ids: ["seed-test"], excluded_open_seed_ids: [] });
+    writeJson(stateFile, {
+      issues: [{ id: "seed-test", status: "open", labels: ["impl"], priority: 1, createdAt: "2026-01-01T00:00:00Z" }],
+      next: 1,
+    });
+    writeFileSync(
+      fakeCli,
+      `#!/usr/bin/env bun
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+const stateFile = ${JSON.stringify(stateFile)};
+const logFile = ${JSON.stringify(cliLog)};
+const repo = ${JSON.stringify(repo)};
+const args = process.argv.slice(2);
+appendFileSync(logFile, JSON.stringify({ cwd: process.cwd(), argv: args }) + "\\n");
+const state = JSON.parse(readFileSync(stateFile, "utf8"));
+const command = args[0];
+const issueFor = (id) => state.issues.find((issue) => issue.id === id);
+const writeState = () => {
+  writeFileSync(stateFile, JSON.stringify(state, null, 2) + "\\n");
+  writeFileSync(repo + "/.seeds/issues.jsonl", state.issues.map((issue) => JSON.stringify(issue)).join("\\n") + "\\n");
+};
+const envelope = (data) => JSON.stringify({ ok: true, command, data }) + "\\n";
+if (command === "health") process.stdout.write(envelope({ summary: { pass: 1, warning: 0, error: 0 }, checks: [] }));
+else if (command === "list") process.stdout.write(envelope({ count: state.issues.length, issues: state.issues }));
+else if (command === "ready") process.stdout.write(envelope({ count: state.issues.filter((issue) => issue.status !== "closed").length, issues: state.issues.filter((issue) => issue.status !== "closed") }));
+else if (command === "blocked") process.stdout.write(envelope({ count: 0, issues: [] }));
+else if (command === "close") {
+  const issue = issueFor(args[1]);
+  if (!issue) process.exit(3);
+  issue.status = "closed";
+  writeState();
+  process.stdout.write(JSON.stringify({ ok: true, command, id: args[1] }) + "\\n");
+} else if (command === "create") {
+  const title = args[args.indexOf("--title") + 1];
+  const id = "follow-" + state.next++;
+  state.issues.push({ id, title, status: "open", labels: [], priority: 2, createdAt: "2026-01-01T00:00:00Z" });
+  writeState();
+  process.stdout.write(JSON.stringify({ ok: true, command, issue: { id } }) + "\\n");
+} else {
+  process.stderr.write("unsupported " + command + "\\n");
+  process.exit(2);
+}
+`,
+    );
+    chmodSync(fakeCli, 0o755);
+    optionsGlobal = {
+      ...parseArgs([
+        "--repo",
+        repo,
+        "--seedstack-dir",
+        seedstackDir,
+        "--adoption-selection",
+        adoptionSelection,
+        "--seed-cli",
+        fakeCli,
+      ]),
+      seedstackDir,
+      adoptionSelection,
+    };
+    const reconcilePath = join(root, "reconcile.json");
+    writeJson(reconcilePath, { ok: true, decision: "manage_reconcile" });
+    const childPreScan = runScan(seedstackDir, 1, "queue-ops-child-pre-scan");
+    assertSelfTest(ok(childPreScan), "queue ops fixture child pre-scan ok");
+    const appliedClose = applyManageQueueOperations(seedstackDir, 1, "seed-test", childPreScan, reconcilePath, [
+      {
+        op_type: "close-current",
+        target_seed: "seed-test",
+        rationale: "done",
+        source_artifact_refs: [reconcilePath],
+        expected_preconditions: ["seed seed-test is still open", `latest dispatch reconcile result still matches ${reconcilePath}`],
+        details: {},
+      },
+    ]);
+    assertSelfTest(ok(appliedClose), "queue ops close apply succeeds");
+    assertSelfTest(stringArray(appliedClose.queue_dirty_paths).includes(".seeds/issues.jsonl"), "queue ops close ledger records dirty queue path");
+    const appliedCreate = applyManageQueueOperations(seedstackDir, 2, "seed-test", childPreScan, reconcilePath, [
+      {
+        op_type: "create-follow-up",
+        target_seed: "seed-test",
+        rationale: "follow-up needed",
+        source_artifact_refs: [reconcilePath],
+        expected_preconditions: [`latest dispatch reconcile result still matches ${reconcilePath}`],
+        details: { title: "Follow up", labels: ["impl"] },
+      },
+    ]);
+    assertSelfTest(ok(appliedCreate), "queue ops create apply succeeds");
+    assertSelfTest(stringArray(appliedCreate.after_seed_ids).includes("follow-1"), "queue ops after ids include created follow-up");
+    const runs = readFileSync(cliLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as JsonObject);
+    assertSelfTest(runs.every((run) => run.cwd === repo), "queue ops configured seed-cli cwd is repo");
+    assertSelfTest(runs.some((run) => Array.isArray(run.argv) && run.argv[0] === "close"), "queue ops fake cli saw close argv");
+    assertSelfTest(runs.some((run) => Array.isArray(run.argv) && run.argv[0] === "create"), "queue ops fake cli saw create argv");
+    const beforeFailed = runs.length;
+    const blocked = applyManageQueueOperations(seedstackDir, 3, "seed-test", childPreScan, join(root, "missing-reconcile.json"), [
+      {
+        op_type: "close-current",
+        target_seed: "seed-test",
+        rationale: "bad stale close",
+        source_artifact_refs: [join(root, "missing-reconcile.json")],
+        expected_preconditions: ["seed seed-test is still open"],
+        details: {},
+      },
+    ]);
+    assertSelfTest(!ok(blocked), "queue ops precondition failure blocks");
+    const afterFailed = readFileSync(cliLog, "utf8").trim().split(/\r?\n/).length;
+    assertSelfTest(afterFailed === beforeFailed + 4, "queue ops precondition failure performs fresh scan only");
+    const beforeMulti = afterFailed;
+    const multiBlocked = applyManageQueueOperations(seedstackDir, 4, "seed-test", childPreScan, reconcilePath, [
+      {
+        op_type: "create-follow-up",
+        target_seed: "seed-test",
+        rationale: "first",
+        source_artifact_refs: [reconcilePath],
+        expected_preconditions: [`latest dispatch reconcile result still matches ${reconcilePath}`],
+        details: { title: "First" },
+      },
+      {
+        op_type: "create-follow-up",
+        target_seed: "seed-test",
+        rationale: "second",
+        source_artifact_refs: [reconcilePath],
+        expected_preconditions: [`latest dispatch reconcile result still matches ${reconcilePath}`],
+        details: { title: "Second" },
+      },
+    ]);
+    assertSelfTest(!ok(multiBlocked), "queue ops multi-mutation batch blocks");
+    const afterMulti = readFileSync(cliLog, "utf8").trim().split(/\r?\n/).length;
+    assertSelfTest(afterMulti === beforeMulti + 4, "queue ops multi-mutation block performs fresh scan only");
+  } finally {
+    optionsGlobal = previousOptions;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 async function selfTest(pretty: boolean): Promise<never> {
   const parsed = parseArgs([
     "--child-total-timeout-ms",
@@ -2760,6 +3235,7 @@ async function selfTest(pretty: boolean): Promise<never> {
   runLoopIterationAllocationSelfTest();
   runArtifactRecoveryFixtureSelfTest();
   runLoopDirtyGuardPolicyFixtureSelfTest();
+  runManageQueueOpsSelfTest();
   const queueDirty = queueDirtyPathsFromStatus([
     " M .seeds/issues.jsonl",
     "?? .seeds/knowledge.jsonl",
@@ -2936,6 +3412,7 @@ async function selfTest(pretty: boolean): Promise<never> {
       "loop_iteration_allocation",
       "artifact_recovery_fixtures",
       "loop_dirty_guard_policy_fixture",
+      "manage_queue_ops_fixture",
     ],
   };
   process.stdout.write(`${JSON.stringify(result, null, pretty ? 2 : 0)}\n`);

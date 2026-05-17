@@ -61,7 +61,6 @@ function runDispatch(state: State, seed: string): JsonObject {
       gateDecision: dispatch?.gate_decision ?? "close",
       dirtyPaths: dispatch?.dirty_paths ?? [],
     });
-    closeIssue(state, seed);
     return {
       contract: "seedstack_child_result.v1",
       ok: true,
@@ -124,14 +123,6 @@ function runManage(state: State, seed: string): JsonObject {
     blocked_reason: state.manage?.blocked_reason,
     summary: { fixture: true },
   };
-}
-
-function closeIssue(state: State, seed: string): void {
-  const issue = state.issues.find((item) => item.id === seed);
-  if (!issue) return;
-  issue.status = "closed";
-  issue.closedAt = "2026-01-01T00:00:01.000Z";
-  issue.updatedAt = "2026-01-01T00:00:01.000Z";
 }
 
 function readState(): State {

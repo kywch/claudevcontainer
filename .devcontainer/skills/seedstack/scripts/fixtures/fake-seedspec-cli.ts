@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 type JsonObject = Record<string, unknown>;
 type Issue = {
@@ -26,7 +26,7 @@ const statePath = process.env.SEEDSTACK_FIXTURE_STATE;
 if (!statePath) fail("SEEDSTACK_FIXTURE_STATE missing");
 
 const command = process.argv[2];
-if (!command || process.argv[3] !== "--json") fail("usage: fake-seedspec-cli.ts <health|list|ready|blocked> --json");
+if (!command) fail("usage: fake-seedspec-cli.ts <health|list|ready|blocked|close> ... --json");
 
 const state = JSON.parse(readFileSync(statePath, "utf8")) as State;
 const issues = state.issues.map(normalizeIssue);
@@ -46,6 +46,18 @@ switch (command) {
   case "blocked":
     printIssues(command, issues.filter((issue) => issue.status !== "closed" && issue.blockedBy.length > 0));
     break;
+  case "close": {
+    if (process.argv[4] !== "--json") fail("usage: fake-seedspec-cli.ts close <id> --json");
+    const id = process.argv[3];
+    const issue = state.issues.find((item) => item.id === id);
+    if (!issue) fail(`unknown issue ${id}`);
+    issue.status = "closed";
+    issue.closedAt = "2026-01-01T00:00:01.000Z";
+    issue.updatedAt = "2026-01-01T00:00:01.000Z";
+    writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+    print({ ok: true, command, data: { id, status: "closed" } });
+    break;
+  }
   default:
     fail(`unsupported command ${command}`);
 }

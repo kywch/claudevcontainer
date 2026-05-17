@@ -30,6 +30,14 @@
         "decision": "continue_other_seeds",
         "seed": "seed-fixture-0001"
       }
+    },
+    {
+      "event": "manage_queue_operations",
+      "fields": {
+        "ok": true,
+        "applied_count": 1,
+        "seed": "seed-fixture-0001"
+      }
     }
   ],
   "expected": {
