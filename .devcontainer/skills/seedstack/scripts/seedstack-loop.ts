@@ -37,12 +37,17 @@ import {
   iterationArtifactPath,
   iterationResultPath,
 } from "./seedstack-paths.ts";
+import { preflightRepo, type WorktreeMetadata, type WorktreePolicy } from "./worktree-preflight.ts";
 
 type JsonObject = Record<string, unknown>;
 type RunStateName = "idle" | "dispatching" | "managing" | "done" | "exhausted" | "blocked" | "escalated" | "loop_cap";
 
 type Options = {
   repo: string;
+  originalRepo: string;
+  worktreePolicy: WorktreePolicy;
+  requireWorktree: boolean;
+  worktree: WorktreeMetadata;
   seedstackDir?: string;
   adoptionSelection?: string;
   seedCli: string;
@@ -95,6 +100,10 @@ Usage:
 
 Args:
   --repo <path>                    Repo root. Default: cwd.
+  --worktree-policy <linked-ok|allow-same-branch>
+                                    Default: linked-ok. Accept linked worktrees but block same-branch duplicates.
+  --allow-same-branch-worktree      Alias for --worktree-policy allow-same-branch.
+  --require-worktree                Require --repo to resolve to a linked git worktree.
   --seedstack-dir <path>           Stack artifact dir containing run-state.json.
   --adoption-selection <path>      Active adoption manifest.
   --seed-cli <path>                work queue CLI. Default: sd.
@@ -165,6 +174,22 @@ function parseReasoningEffort(value: string): Options["codexReasoningEffort"] {
 function parseArgs(argv: string[]): Options {
   const options: Options = {
     repo: process.cwd(),
+    originalRepo: process.cwd(),
+    worktreePolicy: "linked-ok",
+    requireWorktree: false,
+    worktree: {
+      original_repo_input: process.cwd(),
+      original_repo_path: process.cwd(),
+      repo: process.cwd(),
+      git_common_dir: null,
+      git_dir: null,
+      worktree_root: null,
+      branch: null,
+      head: null,
+      linked: false,
+      policy: "linked-ok",
+      require_worktree: false,
+    },
     seedCli: "sd",
     mode: "auto",
     commitPolicy: "none",
@@ -207,6 +232,21 @@ function parseArgs(argv: string[]): Options {
       case "--repo":
         options.repo = take(argv, index, arg);
         index += 1;
+        break;
+      case "--worktree-policy": {
+        const policy = take(argv, index, arg);
+        if (policy !== "linked-ok" && policy !== "allow-same-branch") {
+          throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+        }
+        options.worktreePolicy = policy;
+        index += 1;
+        break;
+      }
+      case "--allow-same-branch-worktree":
+        options.worktreePolicy = "allow-same-branch";
+        break;
+      case "--require-worktree":
+        options.requireWorktree = true;
         break;
       case "--seedstack-dir":
         options.seedstackDir = take(argv, index, arg);
@@ -327,6 +367,13 @@ function parseArgs(argv: string[]): Options {
         break;
       default:
         if (arg.startsWith("--repo=")) options.repo = arg.slice("--repo=".length);
+        else if (arg.startsWith("--worktree-policy=")) {
+          const policy = arg.slice("--worktree-policy=".length);
+          if (policy !== "linked-ok" && policy !== "allow-same-branch") {
+            throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+          }
+          options.worktreePolicy = policy;
+        }
         else if (arg.startsWith("--seedstack-dir=")) options.seedstackDir = arg.slice("--seedstack-dir=".length);
         else if (arg.startsWith("--adoption-selection=")) options.adoptionSelection = arg.slice("--adoption-selection=".length);
         else if (arg.startsWith("--seed-cli=")) options.seedCli = arg.slice("--seed-cli=".length);
@@ -388,9 +435,19 @@ function parseArgs(argv: string[]): Options {
     }
   }
 
-  options.repo = resolve(options.repo);
-  if (options.seedstackDir) options.seedstackDir = resolve(options.repo, options.seedstackDir);
-  if (options.adoptionSelection) options.adoptionSelection = resolve(options.repo, options.adoptionSelection);
+  const callerCwd = process.cwd();
+  const originalRepo = options.repo;
+  if (options.seedstackDir) options.seedstackDir = resolve(callerCwd, options.seedstackDir);
+  if (options.adoptionSelection) options.adoptionSelection = resolve(callerCwd, options.adoptionSelection);
+  const preflight = preflightRepo({
+    repoInput: originalRepo,
+    cwd: callerCwd,
+    policy: options.worktreePolicy,
+    requireWorktree: options.requireWorktree,
+  });
+  options.originalRepo = preflight.metadata.original_repo_path;
+  options.repo = preflight.repo;
+  options.worktree = preflight.metadata;
   if (options.mode === "auto" && !options.commitPolicyExplicit) options.commitPolicy = "per_seed";
   if (options.maxSeedTarget >= options.splitCandidate) {
     throw new Error("--max-seed-target must be lower than --split-candidate");
@@ -1670,6 +1727,9 @@ function runScan(seedstackDir: string, iteration: number, label: string): JsonOb
   return runJson(seedstackDir, iteration, label, checkerPath("scan-seedspec-cli.ts"), [
     "--repo",
     optionsGlobal.repo,
+    "--worktree-policy",
+    optionsGlobal.worktreePolicy,
+    ...(optionsGlobal.requireWorktree ? ["--require-worktree"] : []),
     "--cli",
     optionsGlobal.seedCli,
     "--adoption-selection",
@@ -1790,6 +1850,7 @@ async function runLoop(): Promise<never> {
     knowledge_required: optionsGlobal.knowledgeRequired,
     seedstack_dir: seedstackDir,
     adoption_selection: adoptionSelection,
+    worktree_preflight: optionsGlobal.worktree,
     codex_reasoning_effort: optionsGlobal.codexReasoningEffort,
     followup_cap: optionsGlobal.followupCap,
     followups_per_manage: optionsGlobal.followupsPerManage,
@@ -2324,6 +2385,66 @@ function assertSelfTest(condition: unknown, message: string): void {
   if (!condition) throw new Error(`self-test failed: ${message}`);
 }
 
+function runGitSelfTest(cwd: string, args: string[]): void {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8", maxBuffer: 5 * 1024 * 1024 });
+  assertSelfTest((result.status ?? 1) === 0, `git ${args.join(" ")}: ${result.stderr || result.stdout}`);
+}
+
+function runWorktreePreflightSelfTest(): void {
+  const root = mkdtempSync(join(tmpdir(), "seedstack-worktree-preflight-"));
+  try {
+    const repo = join(root, "repo");
+    mkdirSync(repo, { recursive: true });
+    runGitSelfTest(repo, ["init", "-b", "main"]);
+    runGitSelfTest(repo, ["config", "user.email", "seedstack@example.test"]);
+    runGitSelfTest(repo, ["config", "user.name", "Seedstack Test"]);
+    writeFileSync(join(repo, "README.md"), "seedstack\n");
+    runGitSelfTest(repo, ["add", "README.md"]);
+    runGitSelfTest(repo, ["commit", "-m", "init"]);
+
+    const subdir = join(repo, "nested", "dir");
+    mkdirSync(subdir, { recursive: true });
+    const main = preflightRepo({ repoInput: repo, cwd: root, policy: "linked-ok", requireWorktree: false });
+    const fromSubdir = preflightRepo({ repoInput: subdir, cwd: root, policy: "linked-ok", requireWorktree: false });
+    assertSelfTest(main.repo === repo, "main worktree normalizes to git top-level");
+    assertSelfTest(fromSubdir.repo === repo, "subdir input normalizes to git top-level");
+    assertSelfTest(main.metadata.git_common_dir !== null, "git common dir recorded");
+    assertSelfTest(main.metadata.git_dir !== null, "git dir recorded");
+    assertSelfTest(main.metadata.worktree_root === repo, "worktree root recorded");
+    assertSelfTest(main.metadata.branch === "main", "branch recorded");
+    assertSelfTest(typeof main.metadata.head === "string" && main.metadata.head.length > 0, "head recorded");
+    assertSelfTest(!main.metadata.linked, "main worktree is not linked");
+
+    const linked = join(root, "linked");
+    runGitSelfTest(repo, ["worktree", "add", "-b", "wt-ok", linked]);
+    const linkedPreflight = preflightRepo({ repoInput: linked, cwd: root, policy: "linked-ok", requireWorktree: false });
+    assertSelfTest(linkedPreflight.repo === linked, "linked worktree normalizes to linked root");
+    assertSelfTest(linkedPreflight.metadata.linked, "linked worktree accepted by linked-ok");
+    const requireLinked = preflightRepo({ repoInput: linked, cwd: root, policy: "linked-ok", requireWorktree: true });
+    assertSelfTest(requireLinked.metadata.require_worktree, "require-worktree accepted linked worktree");
+
+    try {
+      preflightRepo({ repoInput: repo, cwd: root, policy: "linked-ok", requireWorktree: true });
+      assertSelfTest(false, "require-worktree fails main worktree");
+    } catch (error) {
+      assertSelfTest(String((error as Error).message).includes("require-worktree"), "require-worktree failure mentions flag");
+    }
+
+    const duplicate = join(root, "linked-duplicate");
+    runGitSelfTest(repo, ["worktree", "add", "--force", duplicate, "wt-ok"]);
+    try {
+      preflightRepo({ repoInput: linked, cwd: root, policy: "linked-ok", requireWorktree: false });
+      assertSelfTest(false, "linked-ok blocks same-branch duplicate linked worktrees");
+    } catch (error) {
+      assertSelfTest(String((error as Error).message).includes("same-branch"), "same-branch duplicate error mentions policy");
+    }
+    const override = preflightRepo({ repoInput: linked, cwd: root, policy: "allow-same-branch", requireWorktree: false });
+    assertSelfTest(override.metadata.policy === "allow-same-branch", "explicit override accepts same-branch duplicate");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function runLoopIterationAllocationSelfTest(): void {
   const root = mkdtempSync(join(tmpdir(), "seedstack-loop-iteration-"));
   const adoptionSelection = join(root, "adoption-selection.json");
@@ -2540,6 +2661,7 @@ async function selfTest(pretty: boolean): Promise<never> {
   assertSelfTest(!beforeFirstDispatch({ state: "idle", loop_iteration: 1 }), "loop iteration marks dispatch started");
   assertSelfTest(!beforeFirstDispatch({ state: "idle", dispatch_attempts: { S1: 1 } }), "dispatch attempt marks dispatch started");
   assertSelfTest(!beforeFirstDispatch({ state: "idle", latest_dispatch: { seed_id: "S1" } }), "latest dispatch marks dispatch started");
+  runWorktreePreflightSelfTest();
   runLoopIterationAllocationSelfTest();
   runArtifactRecoveryFixtureSelfTest();
   runLoopDirtyGuardPolicyFixtureSelfTest();
@@ -2714,6 +2836,7 @@ async function selfTest(pretty: boolean): Promise<never> {
       "child_launch_provenance",
       "dispatch_prompt_launch_provenance",
       "gate_dirty_expected_paths",
+      "worktree_preflight_policy",
       "loop_state_contract",
       "loop_iteration_allocation",
       "artifact_recovery_fixtures",

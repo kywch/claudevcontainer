@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { preflightRepo, type WorktreeMetadata, type WorktreePolicy } from "./worktree-preflight.ts";
 
 type JsonObject = Record<string, unknown>;
 type CommandName = "health" | "list" | "ready" | "blocked";
@@ -31,6 +32,10 @@ type CommandRun = {
 };
 type Options = {
   repo: string;
+  originalRepo: string;
+  worktreePolicy: WorktreePolicy;
+  requireWorktree: boolean;
+  worktree: WorktreeMetadata;
   cli: string;
   adoptionSelection?: string;
   adopted: string[];
@@ -46,6 +51,7 @@ type Scan = {
   blockers: Finding[];
   warnings: Finding[];
   repo: string;
+  worktree_preflight: WorktreeMetadata;
   cli: string;
   commands: CommandRun[];
   health: HealthState;
@@ -96,6 +102,10 @@ Usage:
 
 Args:
   --repo <path>                         Repo root. Default: cwd.
+  --worktree-policy <linked-ok|allow-same-branch>
+                                        Default: linked-ok. Accept linked worktrees but block same-branch duplicates.
+  --allow-same-branch-worktree          Alias for --worktree-policy allow-same-branch.
+  --require-worktree                    Require --repo to resolve to a linked git worktree.
   --cli <path>                          work queue CLI. Default: sd.
   --adoption-selection <path>           adoption-selection.json path.
   --adopted <id>                        Active adopted work order id. Repeatable.
@@ -124,6 +134,22 @@ function requireValue(args: string[], index: number, flag: string): string {
 function parseArgs(argv: string[]): Options {
   const options: Options = {
     repo: process.cwd(),
+    originalRepo: process.cwd(),
+    worktreePolicy: "linked-ok",
+    requireWorktree: false,
+    worktree: {
+      original_repo_input: process.cwd(),
+      original_repo_path: process.cwd(),
+      repo: process.cwd(),
+      git_common_dir: null,
+      git_dir: null,
+      worktree_root: null,
+      branch: null,
+      head: null,
+      linked: false,
+      policy: "linked-ok",
+      require_worktree: false,
+    },
     cli: "sd",
     adopted: [],
     excluded: [],
@@ -150,6 +176,20 @@ function parseArgs(argv: string[]): Options {
         break;
       case "--repo":
         options.repo = take();
+        break;
+      case "--worktree-policy": {
+        const policy = take();
+        if (policy !== "linked-ok" && policy !== "allow-same-branch") {
+          throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+        }
+        options.worktreePolicy = policy;
+        break;
+      }
+      case "--allow-same-branch-worktree":
+        options.worktreePolicy = "allow-same-branch";
+        break;
+      case "--require-worktree":
+        options.requireWorktree = true;
         break;
       case "--cli":
         options.cli = take();
@@ -180,6 +220,13 @@ function parseArgs(argv: string[]): Options {
         break;
       default:
         if (arg.startsWith("--repo=")) options.repo = arg.slice("--repo=".length);
+        else if (arg.startsWith("--worktree-policy=")) {
+          const policy = arg.slice("--worktree-policy=".length);
+          if (policy !== "linked-ok" && policy !== "allow-same-branch") {
+            throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
+          }
+          options.worktreePolicy = policy;
+        }
         else if (arg.startsWith("--cli=")) options.cli = arg.slice("--cli=".length);
         else if (arg.startsWith("--adoption-selection=")) options.adoptionSelection = arg.slice("--adoption-selection=".length);
         else if (arg.startsWith("--adopted=")) options.adopted.push(arg.slice("--adopted=".length));
@@ -192,7 +239,17 @@ function parseArgs(argv: string[]): Options {
         else throw new Error(`unknown arg: ${arg}`);
     }
   }
-  options.repo = resolve(options.repo);
+  const callerCwd = process.cwd();
+  const originalRepo = options.repo;
+  const preflight = preflightRepo({
+    repoInput: originalRepo,
+    cwd: callerCwd,
+    policy: options.worktreePolicy,
+    requireWorktree: options.requireWorktree,
+  });
+  options.originalRepo = preflight.metadata.original_repo_path;
+  options.repo = preflight.repo;
+  options.worktree = preflight.metadata;
   options.cli = options.cli.includes("/") ? resolve(options.repo, options.cli) : options.cli;
   return options;
 }
@@ -429,6 +486,7 @@ function classify(options: Options): Scan {
       blockers,
       warnings,
       repo: options.repo,
+      worktree_preflight: options.worktree,
       cli: options.cli,
       commands,
       health: "unknown",
@@ -599,6 +657,7 @@ function classify(options: Options): Scan {
     blockers,
     warnings,
     repo: options.repo,
+    worktree_preflight: options.worktree,
     cli: options.cli,
     commands,
     health,
@@ -679,6 +738,22 @@ function issue(id: string, extra: JsonObject = {}): JsonObject {
 function runFixture(dir: string, label?: string): Options {
   return {
     repo: dir,
+    originalRepo: dir,
+    worktreePolicy: "linked-ok",
+    requireWorktree: false,
+    worktree: {
+      original_repo_input: dir,
+      original_repo_path: dir,
+      repo: dir,
+      git_common_dir: null,
+      git_dir: null,
+      worktree_root: null,
+      branch: null,
+      head: null,
+      linked: false,
+      policy: "linked-ok",
+      require_worktree: false,
+    },
     cli: join(dir, "seedspec"),
     adopted: [],
     excluded: [],
