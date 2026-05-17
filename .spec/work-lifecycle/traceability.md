@@ -137,3 +137,17 @@ Blocking gaps that still require source-doc lookup:
 | schema readiness | fail | schemas are explicit deferred hardening, not present in draft v0. |
 | conformance readiness | fail | conformance cases are listed but not implemented. |
 | self-sufficiency | fail | implementation-ready behavior still requires source-doc lookup. |
+
+## v1 Hardening Backlog And Review Disposition
+
+The v1 hardening backlog tracks draft v0 risks that are not release-ready:
+
+| risk area | disposition | required before promotion |
+| --- | --- | --- |
+| schemas | deferred | Define schemas for Seeds issues, readiness evidence, seed cards, dispatch work orders, packets, gates, manage decisions, run reports, knowledge records, and capture audits. |
+| conformance | deferred | Add executable conformance cases for ownership selection, readiness, dirty baselines, handoff validation, terminal exclusivity, retry, escalation, close, follow-up, and capture behavior. |
+| errors or IO clauses | deferred | Specify inputs, outputs, status/exit behavior, rejection codes, operator messages, recovery paths, and artifact paths across Seeds CLI, Seedstack, Dispatch Work, and Capture Knowledge. |
+| Quint model | deferred | Model lifecycle transitions, queue and graph guards, terminal exclusivity, retry loops, escalation stops, loop caps, and capture timing. |
+| prose-only draft boundaries | accepted | Keep v0 as source-backed draft inventory for ownership boundaries, vocabulary separation, and high-level lifecycle order. |
+| promotion authority | user decision before promotion | User must approve scope, source authority, schema surface, conformance coverage, Quint coverage, and release/version boundary before any promotion. |
+| live queue mutation by draft spec work | accepted boundary | Draft spec work performs no Seeds issue creation, dispatch, run-loop execution, or `.seeds/**` mutation; `.seeds/knowledge.jsonl` remains owned only by Capture Knowledge. |

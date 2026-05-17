@@ -6,6 +6,9 @@ This spec kit describes the work lifecycle around Seeds issues, Seedstack,
 Dispatch Work, and knowledge capture. It is a draft normalization layer, not a
 release protocol and not a replacement for live tooling.
 
+Draft status: spec work for this draft performed no Seeds issue creation,
+dispatch, run-loop execution, or `.seeds/**` mutation.
+
 ## Authority Order
 
 When lifecycle sources disagree, use this order:
@@ -18,9 +21,10 @@ When lifecycle sources disagree, use this order:
 5. Source documents, implementation evidence, and runtime observations from
    `.seeds/` or command output.
 
-Later files such as schemas, conformance cases, state models, interfaces, or
-traceability documents have no authority in draft v0 because they do not exist
-in this spec kit.
+Future schemas, conformance cases, and canonical models have no authority in
+draft v0 because they do not exist in this spec kit. Current state, interface,
+and traceability files support the draft but do not outrank glossary,
+decisions, or numbered behavior clauses.
 
 ## Source Precedence
 
@@ -50,6 +54,40 @@ Draft v0 includes only:
 - `decisions.md`
 - `glossary.md`
 - `behavior.md`
+- `state.md`
+- `interfaces.md`
+- `traceability.md`
 
 Draft v0 intentionally does not include schemas, conformance cases, Quint
-models, state files, interfaces, or traceability files.
+models, release versioning, or executable promotion artifacts.
+
+## v1 Hardening Backlog
+
+The v1 hardening backlog must be completed before this draft can be considered
+for promotion:
+
+- schemas: define machine-readable contracts for Seeds issues, readiness
+  evidence, seed cards, dispatch work orders, dispatch packets, local gates,
+  manage decisions, run terminal reports, knowledge records, and capture audits.
+- conformance: add executable cases for owner selection, dirty queue guards,
+  readiness rejection, dispatch handoff validation, terminal exclusivity,
+  `done` not closing Seeds issues, retry bounds, escalation disposition,
+  follow-up nonterminal behavior, and no-op knowledge capture.
+- errors and IO clauses: specify command inputs, outputs, exit/status behavior,
+  rejection codes, operator messages, recovery paths, and artifact paths for
+  Seeds CLI, Seedstack, Dispatch Work, and Capture Knowledge boundaries.
+- Quint model: model lifecycle transitions, graph and queue guards, terminal
+  exclusivity, retry loops, escalation stops, loop caps, and capture timing.
+
+## v0 Review Disposition
+
+Review disposition for v0 risks:
+
+- accepted: draft v0 is prose-only and source-backed; it may describe ownership
+  boundaries, local terminal vocabulary, and high-level lifecycle order.
+- deferred: schemas, conformance cases, exact errors or IO clauses, command
+  contracts, artifact contracts, and the Quint model remain v1 hardening
+  backlog work.
+- user decision before promotion: promotion requires explicit approval for
+  scope, source authority, schema surface, conformance coverage, model coverage,
+  and any release label or version boundary.
