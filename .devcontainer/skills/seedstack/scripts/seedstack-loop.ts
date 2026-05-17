@@ -76,6 +76,7 @@ type EventRecord = JsonObject & {
 
 type LoopState = {
   contract: "seedstack_loop_state.v1";
+  loop_iteration: number;
   scan_epoch: number;
   manage_epoch: number;
   total_followups: number;
@@ -533,6 +534,7 @@ function dirtyGuardBlock(text: string): string {
 
 function cleanExpectedSeedPath(path: string): string {
   const cleaned = path.replace(/[),.;:]+$/g, "");
+  if (cleaned.startsWith(".")) return cleaned;
   const repoName = (optionsGlobal?.repo ?? process.cwd()).split(/[\\/]/).filter(Boolean).at(-1);
   if (repoName && cleaned.startsWith(`${repoName}/`)) return cleaned.slice(repoName.length + 1);
   const slash = cleaned.indexOf("/");
@@ -595,8 +597,10 @@ function adoptedCountFromManifest(path: string): number {
 function loadLoopState(seedstackDir: string): LoopState {
   const path = loopStatePath(seedstackDir);
   const baselineSeedCount = adoptedCountFromManifest(optionsGlobal.adoptionSelection);
+  const existingLoopIteration = maxExistingLoopArtifactIteration(seedstackDir);
   const fallback = (): LoopState => ({
     contract: "seedstack_loop_state.v1",
+    loop_iteration: existingLoopIteration,
     scan_epoch: 0,
     manage_epoch: 0,
     total_followups: 0,
@@ -619,6 +623,7 @@ function loadLoopState(seedstackDir: string): LoopState {
     : [];
   return {
     contract: "seedstack_loop_state.v1",
+    loop_iteration: Math.max(numberField(raw.loop_iteration) ?? 0, existingLoopIteration),
     scan_epoch: numberField(raw.scan_epoch) ?? 0,
     manage_epoch: numberField(raw.manage_epoch) ?? 0,
     total_followups: numberField(raw.total_followups) ?? 0,
@@ -629,6 +634,27 @@ function loadLoopState(seedstackDir: string): LoopState {
 
 function saveLoopState(seedstackDir: string, state: LoopState): void {
   writeJson(loopStatePath(seedstackDir), state);
+}
+
+function maxExistingLoopArtifactIteration(seedstackDir: string): number {
+  const dir = loopDir(seedstackDir);
+  if (!existsSync(dir)) return 0;
+  let max = 0;
+  for (const entry of readdirSync(dir)) {
+    const match = /^(\d+)-/.exec(entry);
+    if (!match) continue;
+    const value = Number(match[1]);
+    if (Number.isSafeInteger(value) && value > max) max = value;
+  }
+  return max;
+}
+
+function allocateSupervisorIteration(seedstackDir: string): { iteration: number; loopState: LoopState } {
+  const loopState = loadLoopState(seedstackDir);
+  const iteration = Math.max(loopState.loop_iteration, maxExistingLoopArtifactIteration(seedstackDir)) + 1;
+  const allocated = { ...loopState, loop_iteration: iteration };
+  saveLoopState(seedstackDir, allocated);
+  return { iteration, loopState: allocated };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1766,13 +1792,15 @@ async function runLoop(): Promise<never> {
     followups_per_manage: optionsGlobal.followupsPerManage,
   });
 
-  for (let iteration = 1; iteration <= optionsGlobal.maxIterations; iteration += 1) {
+  for (let supervisorPass = 1; supervisorPass <= optionsGlobal.maxIterations; supervisorPass += 1) {
+    const { iteration, loopState } = allocateSupervisorIteration(seedstackDir);
     const runState = loadRunState(seedstackDir);
     const current = runStateName(runState);
-    const loopState = loadLoopState(seedstackDir);
     emit(seedstackDir, "loop_iteration", {
       iteration,
+      supervisor_pass: supervisorPass,
       state: current,
+      loop_iteration: loopState.loop_iteration,
       scan_epoch: loopState.scan_epoch,
       manage_epoch: loopState.manage_epoch,
       total_followups: loopState.total_followups,
@@ -1913,7 +1941,9 @@ async function runLoop(): Promise<never> {
         });
       }
       if (childResult.decision === "retry_same_seed") {
-        const retryDirty = runJson(seedstackDir, iteration, `retry-dirty-${seed}`, checkerPath("classify-dirty-state.ts"), [
+        const retryAllocation = allocateSupervisorIteration(seedstackDir);
+        const retryIteration = retryAllocation.iteration;
+        const retryDirty = runJson(seedstackDir, retryIteration, `retry-dirty-${seed}`, checkerPath("classify-dirty-state.ts"), [
           "--repo",
           optionsGlobal.repo,
           "--seedstack-dir",
@@ -1928,9 +1958,9 @@ async function runLoop(): Promise<never> {
           "--pretty",
         ], true);
         emit(seedstackDir, "retry_dirty_check", { ok: ok(retryDirty), seed, path: latestArtifactPath(retryDirty) });
-        if (!ok(retryDirty)) stop(seedstackDir, iteration, "blocked", "unexpected_dirty_before_retry", { seed, dirty: latestArtifactPath(retryDirty) });
-        stopOnUnexpectedDirty(seedstackDir, iteration, seed, retryDirty, "unexpected_dirty_before_retry");
-        const retryCap = runJson(seedstackDir, iteration, `retry-loop-cap-${seed}`, checkerPath("check-loop-caps.ts"), [
+        if (!ok(retryDirty)) stop(seedstackDir, retryIteration, "blocked", "unexpected_dirty_before_retry", { seed, dirty: latestArtifactPath(retryDirty) });
+        stopOnUnexpectedDirty(seedstackDir, retryIteration, seed, retryDirty, "unexpected_dirty_before_retry");
+        const retryCap = runJson(seedstackDir, retryIteration, `retry-loop-cap-${seed}`, checkerPath("check-loop-caps.ts"), [
           "--repo",
           optionsGlobal.repo,
           "--run-state",
@@ -1944,8 +1974,8 @@ async function runLoop(): Promise<never> {
           "--pretty",
         ], true);
         emit(seedstackDir, "retry_loop_cap_check", { ok: ok(retryCap), decision: decision(retryCap), seed, path: latestArtifactPath(retryCap) });
-        if (!ok(retryCap)) stop(seedstackDir, iteration, "blocked", decision(retryCap) ?? "retry_attempt_cap", { seed, loop_cap: latestArtifactPath(retryCap) });
-        const retryCheck = transition(seedstackDir, iteration, "managing", "dispatching", [
+        if (!ok(retryCap)) stop(seedstackDir, retryIteration, "blocked", decision(retryCap) ?? "retry_attempt_cap", { seed, loop_cap: latestArtifactPath(retryCap) });
+        const retryCheck = transition(seedstackDir, retryIteration, "managing", "dispatching", [
           "--seed",
           seed,
           "--dirty-result",
@@ -1954,9 +1984,9 @@ async function runLoop(): Promise<never> {
           latestArtifactPath(retryCap),
         ]);
         emit(seedstackDir, "transition", { from: "managing", to: "dispatching", ok: ok(retryCheck), decision: decision(retryCheck), seed, reason: "retry_same_seed" });
-        if (!ok(retryCheck)) stop(seedstackDir, iteration, "blocked", "retry_transition_failed", { seed, transition: latestArtifactPath(retryCheck) });
+        if (!ok(retryCheck)) stop(seedstackDir, retryIteration, "blocked", "retry_transition_failed", { seed, transition: latestArtifactPath(retryCheck) });
         prepareFreshDispatchWorkspace(seedstackDir, seed);
-        updateRunState(seedstackDir, iteration, "dispatching", [
+        updateRunState(seedstackDir, retryIteration, "dispatching", [
           "--seed",
           seed,
           "--decision",
@@ -1966,14 +1996,14 @@ async function runLoop(): Promise<never> {
           "--dirty-result",
           latestArtifactPath(retryDirty),
         ]);
-        const retryResultFile = resultPath(seedstackDir, "dispatch", seed, iteration);
+        const retryResultFile = resultPath(seedstackDir, "dispatch", seed, retryIteration);
         const retryPrompt = buildDispatchPrompt(optionsGlobal.repo, seed, retryResultFile);
         dashboardCurrentSeed = seed;
         dashboardCurrentPhase = "dispatch";
         dashboardPhaseStartedAt = Date.now();
-        const retryDispatchResult = await runCheckedChildStep(seedstackDir, iteration, "dispatch", seed, retryPrompt, retryResultFile);
+        const retryDispatchResult = await runCheckedChildStep(seedstackDir, retryIteration, "dispatch", seed, retryPrompt, retryResultFile);
         if (dashboardCurrentTiming) dashboardCurrentTiming.dispatch_ms = Date.now() - dashboardPhaseStartedAt;
-        reconcileDispatchToManage(seedstackDir, iteration, seed, retryDispatchResult, retryResultFile);
+        reconcileDispatchToManage(seedstackDir, retryIteration, seed, retryDispatchResult, retryResultFile);
         continue;
       }
       let commitCheckPath: string | null = null;
@@ -2283,11 +2313,84 @@ async function runLoop(): Promise<never> {
     continue;
   }
 
-  stop(optionsGlobal.seedstackDir, optionsGlobal.maxIterations + 1, "loop_cap", "max_supervisor_iterations");
+  const { iteration } = allocateSupervisorIteration(optionsGlobal.seedstackDir);
+  stop(optionsGlobal.seedstackDir, iteration, "loop_cap", "max_supervisor_iterations");
 }
 
 function assertSelfTest(condition: unknown, message: string): void {
   if (!condition) throw new Error(`self-test failed: ${message}`);
+}
+
+function runLoopIterationAllocationSelfTest(): void {
+  const root = mkdtempSync(join(tmpdir(), "seedstack-loop-iteration-"));
+  const adoptionSelection = join(root, "adoption-selection.json");
+  const previousOptions = optionsGlobal;
+  writeFileSync(adoptionSelection, JSON.stringify({ adopted_seed_ids: ["seed-test"] }));
+  optionsGlobal = {
+    ...parseArgs(["--repo", root, "--seedstack-dir", root, "--adoption-selection", adoptionSelection]),
+    seedstackDir: root,
+    adoptionSelection,
+  };
+
+  try {
+    const noState = join(root, "no-state");
+    mkdirSync(noState, { recursive: true });
+    assertSelfTest(loadLoopState(noState).loop_iteration === 0, "loop iteration defaults to zero without state or files");
+    assertSelfTest(allocateSupervisorIteration(noState).iteration === 1, "first allocation starts at one");
+
+    const persisted = join(root, "persisted");
+    mkdirSync(persisted, { recursive: true });
+    writeJson(loopStatePath(persisted), {
+      contract: "seedstack_loop_state.v1",
+      loop_iteration: 7,
+      scan_epoch: 0,
+      manage_epoch: 0,
+      total_followups: 0,
+      baseline_seed_count: 1,
+      skipped_seeds: [],
+    });
+    assertSelfTest(loadLoopState(persisted).loop_iteration === 7, "loop iteration loads persisted state");
+    assertSelfTest(allocateSupervisorIteration(persisted).iteration === 8, "allocation follows persisted state");
+
+    const filesOnly = join(root, "files-only");
+    mkdirSync(loopDir(filesOnly), { recursive: true });
+    writeFileSync(iterationArtifactPath(filesOnly, 12, "scan"), "{}\n");
+    assertSelfTest(loadLoopState(filesOnly).loop_iteration === 12, "loop iteration scans existing artifact files");
+    assertSelfTest(allocateSupervisorIteration(filesOnly).iteration === 13, "allocation follows existing artifact files");
+
+    const merged = join(root, "merged");
+    mkdirSync(loopDir(merged), { recursive: true });
+    writeJson(loopStatePath(merged), {
+      contract: "seedstack_loop_state.v1",
+      loop_iteration: 7,
+      scan_epoch: 0,
+      manage_epoch: 0,
+      total_followups: 0,
+      baseline_seed_count: 1,
+      skipped_seeds: [],
+    });
+    writeFileSync(iterationArtifactPath(merged, 12, "scan"), "{}\n");
+    assertSelfTest(loadLoopState(merged).loop_iteration === 12, "loop iteration merges persisted state and file max");
+
+    const large = join(root, "large");
+    mkdirSync(loopDir(large), { recursive: true });
+    writeFileSync(join(loopDir(large), "12345-scan.json"), "{}\n");
+    assertSelfTest(loadLoopState(large).loop_iteration === 12345, "loop iteration scans large names");
+    assertSelfTest(allocateSupervisorIteration(large).iteration === 12346, "allocation follows large existing names");
+
+    const retry = join(root, "retry");
+    mkdirSync(loopDir(retry), { recursive: true });
+    const first = allocateSupervisorIteration(retry).iteration;
+    const firstResult = resultPath(retry, "dispatch", "seed-test", first);
+    writeFileSync(firstResult, "{}\n");
+    const second = allocateSupervisorIteration(retry).iteration;
+    const secondResult = resultPath(retry, "dispatch", "seed-test", second);
+    assertSelfTest(second === first + 1, "retry same seed allocates fresh supervisor iteration");
+    assertSelfTest(secondResult !== firstResult && existsSync(firstResult), "retry same seed does not clobber first dispatch result");
+  } finally {
+    optionsGlobal = previousOptions;
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 async function selfTest(pretty: boolean): Promise<never> {
@@ -2361,6 +2464,7 @@ async function selfTest(pretty: boolean): Promise<never> {
   assertSelfTest(!beforeFirstDispatch({ state: "idle", loop_iteration: 1 }), "loop iteration marks dispatch started");
   assertSelfTest(!beforeFirstDispatch({ state: "idle", dispatch_attempts: { S1: 1 } }), "dispatch attempt marks dispatch started");
   assertSelfTest(!beforeFirstDispatch({ state: "idle", latest_dispatch: { seed_id: "S1" } }), "latest dispatch marks dispatch started");
+  runLoopIterationAllocationSelfTest();
   const queueDirty = queueDirtyPathsFromStatus([
     " M .seeds/issues.jsonl",
     "?? .seeds/knowledge.jsonl",
@@ -2496,6 +2600,21 @@ async function selfTest(pretty: boolean): Promise<never> {
       yamlGatePaths.includes("impl_v2/rust/tests/list_labels.rs"),
     "gate dirty_guard yaml paths parse",
   );
+  const devcontainerGatePaths = parseGateExpectedSeedPaths([
+    "## Dirty Guard",
+    "- implementation paths: .devcontainer/skills/seedstack/scripts/seedstack-loop.ts",
+    "```json",
+    JSON.stringify({
+      contract: "dirty_guard.v1",
+      actual_impl_paths: [".devcontainer/skills/seedstack/scripts/seedstack-loop.ts"],
+    }),
+    "```",
+  ].join("\n"));
+  assertSelfTest(
+    devcontainerGatePaths.includes(".devcontainer/skills/seedstack/scripts/seedstack-loop.ts") &&
+      !devcontainerGatePaths.includes("skills/seedstack/scripts/seedstack-loop.ts"),
+    "gate dirty paths preserve dot-prefixed root",
+  );
 
   const result = {
     contract: "seedstack_loop_self_test.v1",
@@ -2518,6 +2637,7 @@ async function selfTest(pretty: boolean): Promise<never> {
       "dispatch_prompt_launch_provenance",
       "gate_dirty_expected_paths",
       "loop_state_contract",
+      "loop_iteration_allocation",
     ],
   };
   process.stdout.write(`${JSON.stringify(result, null, pretty ? 2 : 0)}\n`);
