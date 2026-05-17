@@ -24,6 +24,8 @@ type State = {
     decision?: ChildDecision;
     followups_requested?: number;
     followups_created?: string[];
+    write_files?: Array<{ path: string; content?: string }>;
+    proposed_queue_operations?: JsonObject[];
     blocked_reason?: string;
   };
 };
@@ -98,6 +100,9 @@ function runDispatch(state: State, seed: string): JsonObject {
 
 function runManage(state: State, seed: string): JsonObject {
   const decision = state.manage?.decision ?? "continue";
+  for (const file of state.manage?.write_files ?? []) {
+    writeRepoFile(file.path, file.content ?? `fixture manage change for ${seed}\n`);
+  }
   return {
     contract: "seedstack_child_result.v1",
     ok: true,
@@ -106,6 +111,16 @@ function runManage(state: State, seed: string): JsonObject {
     decision,
     followups_requested: state.manage?.followups_requested ?? 0,
     followups_created: state.manage?.followups_created ?? [],
+    proposed_queue_operations: state.manage?.proposed_queue_operations ?? [
+      {
+        op_type: decision === "retry_same_seed" ? "no-op" : "close-current",
+        target_seed: seed,
+        rationale: "fixture manage proposal",
+        source_artifact_refs: [resultFile],
+        expected_preconditions: [`seed ${seed} is still open`],
+        details: {},
+      },
+    ],
     blocked_reason: state.manage?.blocked_reason,
     summary: { fixture: true },
   };

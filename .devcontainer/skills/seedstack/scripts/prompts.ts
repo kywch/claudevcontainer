@@ -194,11 +194,20 @@ Seedstack dir: ${args.seedstackDir}
 Task:
 - Manage only latest dispatch result for seed ${args.seed}.
 - Do not dispatch another seed.
-- Close exactly this seed only if dispatch-work reported local done and fresh queue state still matches your decision snapshot.
-- Do not close any other seed.
-- You may create at most ${args.followupsPerManage} follow-up seeds in this manage step.
+- Do not run Seeds CLI queue mutation commands. Forbidden examples: sd close, sd create, dependency edits, label edits, or any direct write under .seeds/**.
+- Propose queue operations only. Seedstack supervisor owns all queue mutations after it checks fresh queue state and preconditions.
+- Propose close-current for exactly this seed only if dispatch-work reported local done and fresh queue state still matches your decision snapshot.
+- Do not propose closing any other seed.
+- You may propose at most ${args.followupsPerManage} follow-up seeds in this manage step.
 - Total remaining follow-up budget is ${args.remainingFollowups}.
-- If more follow-ups are needed than budget permits, do not create them; report blocked.
+- If more follow-ups are needed than budget permits, do not propose them; report blocked.
+- proposed_queue_operations entries must be structured objects with:
+  - op_type: one of close-current, create-follow-up, add-dependency, adjust-labels, no-op
+  - target_seed: seed id affected by the operation
+  - rationale: why the supervisor should apply it
+  - source_artifact_refs: dispatch/reconcile artifact paths supporting it
+  - expected_preconditions: fresh queue facts the supervisor must verify before applying it
+  - details: optional operation-specific object, such as follow-up title/body, dependency ids, or labels to add/remove
 - Set decision to exactly one of: retry_same_seed, continue_other_seeds, blocked, done.
 - Use retry_same_seed only when the same seed should be dispatched again.
 - Use continue_other_seeds only after the current dispatch result is fully handled and the loop may select another seed.
@@ -214,6 +223,16 @@ Task:
   "decision": "continue_other_seeds",
   "followups_requested": 0,
   "followups_created": [],
+  "proposed_queue_operations": [
+    {
+      "op_type": "close-current",
+      "target_seed": "${args.seed}",
+      "rationale": "dispatch result is locally closed and accepted by reconcile evidence",
+      "source_artifact_refs": ["${args.reconcileFile}"],
+      "expected_preconditions": ["seed ${args.seed} is still open", "latest dispatch reconcile result still matches ${args.reconcileFile}"],
+      "details": {}
+    }
+  ],
   "blocked_reason": null
 }
 `;

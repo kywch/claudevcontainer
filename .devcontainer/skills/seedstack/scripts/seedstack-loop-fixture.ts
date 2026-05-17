@@ -80,6 +80,7 @@ const DEFAULT_SCENARIOS = [
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "unexpected-dirty-before-next-seed.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "attempt-cap-skip-continues.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "manage-followup-cap.json"),
+  join(SEEDSTACK_DIR, "test", "loop-scenarios", "manage-direct-queue-mutation.json"),
 ];
 
 const HELP = `seedstack-loop-fixture.ts seedstack_loop_fixture.v1

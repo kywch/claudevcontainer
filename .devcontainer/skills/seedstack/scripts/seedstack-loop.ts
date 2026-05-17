@@ -542,6 +542,10 @@ function queueDirtyPaths(): string[] {
   return queueDirtyPathsFromStatus(proc.stdout);
 }
 
+function proposedQueueOperations(result: ChildResult): JsonObject[] {
+  return Array.isArray(result.proposed_queue_operations) ? result.proposed_queue_operations.filter(isObject) : [];
+}
+
 function beforeFirstDispatch(runState: JsonObject): boolean {
   if ((numberField(runState.loop_iteration) ?? 0) > 0) return false;
   const attempts = isObject(runState.dispatch_attempts) ? Object.keys(runState.dispatch_attempts).length : 0;
@@ -2004,6 +2008,29 @@ async function runLoop(): Promise<never> {
       dashboardPhaseStartedAt = Date.now();
       const childResult = await runCheckedChildStep(seedstackDir, iteration, "manage", seed, prompt, resultFile);
       if (dashboardCurrentTiming) dashboardCurrentTiming.manage_ms = Date.now() - dashboardPhaseStartedAt;
+      const proposedOps = proposedQueueOperations(childResult);
+      emit(seedstackDir, "manage_queue_proposals", {
+        seed,
+        count: proposedOps.length,
+        op_types: proposedOps.map((proposal) => stringField(proposal.op_type) ?? "unknown"),
+        result_path: resultFile,
+      });
+      const postManageQueueDirtyPaths = queueDirtyPaths();
+      if (postManageQueueDirtyPaths.length > 0) {
+        const dirtyPath = writeLoopJson(seedstackDir, iteration, `post-manage-queue-dirty-${seed}`, {
+          contract: "manage_queue_mutation_guard.v1",
+          ok: false,
+          seed,
+          queue_dirty_paths: postManageQueueDirtyPaths,
+          result_path: resultFile,
+          message: "manage child must propose queue operations, not mutate .seeds/** directly",
+        });
+        stop(seedstackDir, iteration, "blocked", "manage_child_direct_queue_mutation", {
+          seed,
+          dirty: dirtyPath,
+          queue_dirty_paths: postManageQueueDirtyPaths,
+        });
+      }
       const postScan = runScan(seedstackDir, iteration, `post-manage-scan-${seed}`);
       if (!ok(postScan)) stop(seedstackDir, iteration, "blocked", "scan_failed_after_manage", { seed, scan: latestArtifactPath(postScan) });
       const observedCreates = setDifference(scanListIds(postScan), scanListIds(preScan)).length;

@@ -151,6 +151,16 @@ function checkPerManageFollowupCap(dir: string): CaseResult {
     decision: "continue",
     followups_requested: 3,
     followups_created: [],
+    proposed_queue_operations: [
+      {
+        op_type: "create-follow-up",
+        target_seed: "seed-1-follow-up",
+        rationale: "fixture follow-up proposal",
+        source_artifact_refs: [join(dir, "manage-followups-3.json")],
+        expected_preconditions: ["seed-1 is still open"],
+        details: {},
+      },
+    ],
   });
   const result = readChildResult(resultPath, "manage", "seed-1");
   return assertCase("perManageFollowupCap", followupCount(result) > 2, result);
