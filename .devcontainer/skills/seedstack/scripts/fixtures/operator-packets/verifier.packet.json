@@ -1,0 +1,29 @@
+{
+  "packet_version": "operator.v1",
+  "operator": "verifier",
+  "run_id": "run-example",
+  "task_id": null,
+  "seed": null,
+  "trial_id": null,
+  "queue_snapshot_id": null,
+  "readonly": true,
+  "status": "ok",
+  "findings": [
+    {
+      "id": "verifier-clean",
+      "severity": "info",
+      "summary": "Verifier failure classification found no false-positive suspicion or unresolved blocker.",
+      "evidence_refs": []
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "verifier-noop",
+      "owner": "main_agent",
+      "action": "none",
+      "summary": "No queue mutation recommended from verifier inspection.",
+      "queue_mutation_allowed": false,
+      "target": null
+    }
+  ]
+}

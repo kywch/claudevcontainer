@@ -140,7 +140,7 @@ function validateCompactChildArtifactContract(
   if (!hasAttr(attrs, "dirty_baseline") || !attrs.dirty_baseline) {
     add("blocker", "prompt_child_contract_missing_dirty_baseline", `child_artifact_contract missing dirty_baseline: ${linkedPath}`, statusFile);
   }
-  if (!hasAnyAttr(attrs, ["artifact_write_roots", "dispatch_artifact_roots", "allowed_write_roots"])) {
+  if (!hasAnyAttr(attrs, ["artifact_write_roots", "dispatch_artifact_roots", "seedstack_artifact_roots", "gate_artifacts", "allowed_write_roots"])) {
     add("blocker", "prompt_child_contract_missing_attr", `child_artifact_contract missing artifact_write_roots: ${linkedPath}`, statusFile);
   }
   if (!hasAttr(attrs, "repo_edit_roots") && !hasAttr(attrs, "allowed_write_roots")) {
@@ -177,7 +177,7 @@ function validatePromptPreserveDirtyPaths(preserveDirtyPaths: { present: boolean
   if (!hasAttr(preserveDirtyPaths.attrs, "dirty_baseline") || !preserveDirtyPaths.attrs.dirty_baseline) {
     add("blocker", "prompt_preserve_dirty_paths_missing_attr", `preserve_dirty_paths missing dirty_baseline: ${linkedPath}`, statusFile);
   }
-  if (!hasAnyAttr(preserveDirtyPaths.attrs, ["artifact_write_roots", "dispatch_artifact_roots", "allowed_write_roots"])) {
+  if (!hasAnyAttr(preserveDirtyPaths.attrs, ["artifact_write_roots", "dispatch_artifact_roots", "seedstack_artifact_roots", "gate_artifacts", "allowed_write_roots"])) {
     add("blocker", "prompt_preserve_dirty_paths_missing_attr", `preserve_dirty_paths missing artifact_write_roots: ${linkedPath}`, statusFile);
   }
   if (!hasAttr(preserveDirtyPaths.attrs, "repo_edit_roots") && !hasAttr(preserveDirtyPaths.attrs, "allowed_write_roots")) {

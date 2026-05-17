@@ -152,6 +152,11 @@ Only create seeds when explicitly requested.
   <run_transition_check path="run-transition-check.json" contract="run_transition_check.v1" />
   <commit_check path="commit-check.json" contract="commit_ledger_check.v1" />
   <update_run_state_result path="update-run-state-result.json" contract="update_run_state.v1" />
+  <knowledge_store path=".seeds/knowledge.jsonl" contract="append-only knowledge log" />
+  <operator_run path="operator/operator_run.json" contract="operator.v1" />
+  <operator_packet path="operator/<preflight|artifacts|verifier|recovery|knowledge>.packet.json" contract="operator.v1" />
+  <operator_summary path="operator/operator_summary.json" contract="operator.v1" />
+  <operator_packet_check path="operator/operator-packets-check.json" contract="operator_packets_check.v1" />
   <review path="review-r<round>-a<agent>.md" />
   <review_diff path="review-diff-r<round>.md" />
   <verify path="verify-r<round>.md" />
@@ -242,6 +247,9 @@ with `state=idle` or a terminal state, and before every stop/resume. Use
 11. Stop condition, if any.
 12. Next command or next user decision.
 13. Dirty snapshot using `manage-run.md` path classifications.
+14. Latest knowledge capture state:
+   `recorded|none_qualified|store_missing|skipped_user_waived`, capture point,
+   and artifact path.
 
 Never represent a closed seed as active. `active_dispatch` is null unless a
 dispatch is currently unreconciled or in progress.

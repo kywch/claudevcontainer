@@ -101,6 +101,16 @@
   that triggered the diff review already counted toward the adjustment cap;
   escalation does not consume an additional adjustment.
 
+## Knowledge lifecycle
+
+- **Knowledge log**: `.seeds/knowledge.jsonl`, an append-only JSONL store for
+  reusable lessons. Only `capture-knowledge` may append to it.
+- **Capture point**: required opportunity to run knowledge capture after clean
+  seed close, escalation resolution, or run terminal `done`.
+- **Capture state**: one of `recorded`, `none_qualified`, `store_missing`, or
+  `skipped_user_waived`, recorded in artifacts so absence of new knowledge is
+  distinguishable from skipped capture.
+
 ## Lenses
 
 - **Skill compliance**: Sizing, edges, verification ownership, quality bar,

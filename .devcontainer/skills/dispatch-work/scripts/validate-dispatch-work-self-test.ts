@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, validateDispatch, writeJson } from "./validate-dispatch-work.ts";
 import { compactPromptFixture, initGitRepo, legacyPromptFixture, makeFixtureRound, mutateLaunchEvidence, promptFixture, writeSeedIssue } from "./validate-dispatch-work-fixtures.ts";
+import { snapshotFromStatus } from "../../seedstack/scripts/snapshot-dirty-state.ts";
 
 export function runSelfTest(pretty: boolean): number {
   const root = mkdtempSync(join(tmpdir(), "dispatch-validate-"));
@@ -362,7 +363,8 @@ export function runSelfTest(pretty: boolean): number {
     writeSeedIssue(wrongAreaRepo, seed, "custom/root");
     writeFileSync(
       join(wrongAreaRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-prompt.md"),
-      `${promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")}\nWrite scope: impl/rust/**\n`,
+      promptFixture(seed, "implement", "implement-a1-prompt.md", "implement-a1.log", "implement-a1.status", "implement-a1-report.md")
+        .replace(/repo_edit_roots="[^"]*"/g, 'repo_edit_roots="impl/rust"'),
     );
     const wrongArea = validateDispatch({ ...parseArgs([]), repo: wrongAreaRepo, seed });
 
@@ -462,12 +464,105 @@ export function runSelfTest(pretty: boolean): number {
     );
     const dirtyGuardMismatch = validateDispatch({ ...parseArgs([]), repo: dirtyGuardMismatchRepo, seed });
 
+    const structuredGuardRepo = join(root, "structured-guard-repo");
+    makeFixtureRound(structuredGuardRepo, seed, join(structuredGuardRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    setRepoEditRoots(structuredGuardRepo, seed, "src/fixture.ts");
+    const structuredGuardSnapshotPath = join(structuredGuardRepo, "snapshot.json");
+    writeFileSync(structuredGuardSnapshotPath, `${JSON.stringify(snapshotFromStatus(structuredGuardRepo, " M src/fixture.ts\n"))}\n`);
+    writeStructuredDirtyGuardGate(structuredGuardRepo, seed, "snapshot.json", ["src/fixture.ts"]);
+    const structuredGuard = validateDispatch({ ...parseArgs([]), repo: structuredGuardRepo, seed, dirtyStatusFile: structuredGuardSnapshotPath });
+
+    const structuredBeatsMarkdownRepo = join(root, "structured-beats-markdown-repo");
+    makeFixtureRound(structuredBeatsMarkdownRepo, seed, join(structuredBeatsMarkdownRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    setRepoEditRoots(structuredBeatsMarkdownRepo, seed, "src/fixture.ts");
+    const structuredBeatsMarkdownSnapshotPath = join(structuredBeatsMarkdownRepo, "snapshot.json");
+    writeFileSync(structuredBeatsMarkdownSnapshotPath, `${JSON.stringify(snapshotFromStatus(structuredBeatsMarkdownRepo, " M src/fixture.ts\n"))}\n`);
+    writeStructuredDirtyGuardGate(structuredBeatsMarkdownRepo, seed, "snapshot.json", ["src/fixture.ts"], ["- implementation path: `<placeholder/wrong>`"]);
+    const structuredBeatsMarkdown = validateDispatch({ ...parseArgs([]), repo: structuredBeatsMarkdownRepo, seed, dirtyStatusFile: structuredBeatsMarkdownSnapshotPath });
+
+    const structuredMismatchRepo = join(root, "structured-mismatch-repo");
+    makeFixtureRound(structuredMismatchRepo, seed, join(structuredMismatchRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    setRepoEditRoots(structuredMismatchRepo, seed, "src/fixture.ts");
+    const structuredMismatchSnapshotPath = join(structuredMismatchRepo, "snapshot.json");
+    writeFileSync(structuredMismatchSnapshotPath, `${JSON.stringify(snapshotFromStatus(structuredMismatchRepo, " M src/fixture.ts\n"))}\n`);
+    writeStructuredDirtyGuardGate(structuredMismatchRepo, seed, "snapshot.json", ["src/other.ts"]);
+    const structuredMismatch = validateDispatch({ ...parseArgs([]), repo: structuredMismatchRepo, seed, dirtyStatusFile: structuredMismatchSnapshotPath });
+
     const queueMutationRepo = join(root, "queue-mutation-repo");
     makeFixtureRound(queueMutationRepo, seed, join(queueMutationRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
     initGitRepo(queueMutationRepo);
     mkdirSync(join(queueMutationRepo, ".seeds"), { recursive: true });
     writeFileSync(join(queueMutationRepo, ".seeds/issues.jsonl"), "{}\n");
     const queueMutation = validateDispatch({ ...parseArgs([]), repo: queueMutationRepo, seed });
+    const managerQueueMutation = validateDispatch({
+      ...parseArgs([]),
+      repo: queueMutationRepo,
+      seed,
+      queueMutationContext: "manager",
+    });
+
+    const snapshotCleanRepo = join(root, "snapshot-clean-repo");
+    makeFixtureRound(snapshotCleanRepo, seed, join(snapshotCleanRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    mkdirSync(join(snapshotCleanRepo, "src"), { recursive: true });
+    writeFileSync(join(snapshotCleanRepo, "src/live.ts"), "base\n");
+    initGitRepo(snapshotCleanRepo);
+    writeFileSync(join(snapshotCleanRepo, "src/live.ts"), "live dirty after snapshot\n");
+    const cleanSnapshotPath = join(snapshotCleanRepo, "snapshot-clean.json");
+    writeFileSync(cleanSnapshotPath, `${JSON.stringify(snapshotFromStatus(snapshotCleanRepo, ""))}\n`);
+    const snapshotClean = validateDispatch({ ...parseArgs([]), repo: snapshotCleanRepo, seed, dirtyStatusFile: cleanSnapshotPath });
+
+    const snapshotDirtyRepo = join(root, "snapshot-dirty-repo");
+    makeFixtureRound(snapshotDirtyRepo, seed, join(snapshotDirtyRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const dirtySnapshotPath = join(snapshotDirtyRepo, "snapshot-dirty.json");
+    writeFileSync(dirtySnapshotPath, `${JSON.stringify(snapshotFromStatus(snapshotDirtyRepo, " M src/from-snapshot.ts\n"))}\n`);
+    const snapshotDirty = validateDispatch({ ...parseArgs([]), repo: snapshotDirtyRepo, seed, dirtyStatusFile: dirtySnapshotPath });
+
+    const multiAreaDirtyRepo = join(root, "multi-area-dirty-repo");
+    makeFixtureRound(multiAreaDirtyRepo, seed, join(multiAreaDirtyRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(multiAreaDirtyRepo, seed, "spec/conformance + impl_go/v1");
+    const multiAreaRoots = "spec/conformance impl_go/v1";
+    for (const prompt of ["execute-prompt.md", "implement-a1-prompt.md", "review-r1-a1-prompt.md", "verify-1-prompt.md"]) {
+      const promptPath = join(multiAreaDirtyRepo, "tmp/dispatch-work", seed, "round-1", prompt);
+      writeFileSync(promptPath, readFileSync(promptPath, "utf8").replace(/repo_edit_roots="[^"]*"/g, `repo_edit_roots="${multiAreaRoots}"`));
+    }
+    const multiAreaGatePath = join(multiAreaDirtyRepo, "tmp/dispatch-work", seed, "gate.md");
+    writeFileSync(
+      multiAreaGatePath,
+      readFileSync(multiAreaGatePath, "utf8").replace(
+        "Known dirty paths: none.",
+        "Known dirty paths:\n- `spec/conformance/case.yaml`: conformance update.\n- `impl_go/v1/run.go`: implementation update.",
+      ),
+    );
+    const multiAreaSnapshotPath = join(multiAreaDirtyRepo, "snapshot.json");
+    writeFileSync(multiAreaSnapshotPath, `${JSON.stringify(snapshotFromStatus(multiAreaDirtyRepo, " M spec/conformance/case.yaml\n M impl_go/v1/run.go\n"))}\n`);
+    const multiAreaDirty = validateDispatch({ ...parseArgs([]), repo: multiAreaDirtyRepo, seed, dirtyStatusFile: multiAreaSnapshotPath });
+
+    const proseMentionRepo = join(root, "prose-mention-repo");
+    makeFixtureRound(proseMentionRepo, seed, join(proseMentionRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(proseMentionRepo, seed, "spec/conformance + impl_go/v1");
+    writeFileSync(join(proseMentionRepo, "tmp/dispatch-work", seed, "research-1.md"), "Source refs: impl_bad/v1/src/main.go\nCommand: cd impl_bad/v1 && go test ./...\n");
+    const proseMentionSnapshotPath = join(proseMentionRepo, "snapshot.json");
+    writeFileSync(proseMentionSnapshotPath, `${JSON.stringify(snapshotFromStatus(proseMentionRepo, ""))}\n`);
+    const proseMention = validateDispatch({ ...parseArgs([]), repo: proseMentionRepo, seed, dirtyStatusFile: proseMentionSnapshotPath });
+
+    const outOfScopeDirtyRepo = join(root, "out-of-scope-dirty-repo");
+    makeFixtureRound(outOfScopeDirtyRepo, seed, join(outOfScopeDirtyRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(outOfScopeDirtyRepo, seed, "spec/conformance + impl_go/v1");
+    for (const prompt of ["execute-prompt.md", "implement-a1-prompt.md", "review-r1-a1-prompt.md", "verify-1-prompt.md"]) {
+      const promptPath = join(outOfScopeDirtyRepo, "tmp/dispatch-work", seed, "round-1", prompt);
+      writeFileSync(promptPath, readFileSync(promptPath, "utf8").replace(/repo_edit_roots="[^"]*"/g, `repo_edit_roots="${multiAreaRoots}"`));
+    }
+    const outOfScopeGatePath = join(outOfScopeDirtyRepo, "tmp/dispatch-work", seed, "gate.md");
+    writeFileSync(
+      outOfScopeGatePath,
+      readFileSync(outOfScopeGatePath, "utf8").replace(
+        "Known dirty paths: none.",
+        "Known dirty paths:\n- `impl_bad/v1/run.go`: implementation update.",
+      ),
+    );
+    const outOfScopeSnapshotPath = join(outOfScopeDirtyRepo, "snapshot.json");
+    writeFileSync(outOfScopeSnapshotPath, `${JSON.stringify(snapshotFromStatus(outOfScopeDirtyRepo, " M impl_bad/v1/run.go\n"))}\n`);
+    const outOfScopeDirty = validateDispatch({ ...parseArgs([]), repo: outOfScopeDirtyRepo, seed, dirtyStatusFile: outOfScopeSnapshotPath });
 
     const alternateRootRepo = join(root, "alternate-root-repo");
     const alternateRound = join(alternateRootRepo, "custom-dispatch", seed, "round-1");
@@ -525,14 +620,23 @@ export function runSelfTest(pretty: boolean): number {
       { name: "arbitrary seed area mismatch blocks", pass: !arbitraryArea.ok && arbitraryArea.blockers.some((finding) => finding.code === "artifact_impl_root_mismatch"), blockers: arbitraryArea.blockers.length },
       { name: "artifact roots ignored for implementation scope", pass: artifactRootsIgnored.ok, blockers: artifactRootsIgnored.blockers.length },
       { name: "legacy allowed_write_roots compatibility passes", pass: legacyAllowedRoots.ok, blockers: legacyAllowedRoots.blockers.length },
-      { name: "top-level area mismatch blocks", pass: !topLevelArea.ok && topLevelArea.blockers.some((finding) => finding.code === "artifact_impl_root_mismatch"), blockers: topLevelArea.blockers.length },
+      { name: "top-level prose area mention ignored", pass: topLevelArea.ok, blockers: topLevelArea.blockers.length },
       { name: "quoted area passes", pass: quotedArea.ok, blockers: quotedArea.blockers.length },
       { name: "plus area alias passes", pass: plusAliasArea.ok, blockers: plusAliasArea.blockers.length },
       { name: "comma area passes", pass: commaArea.ok, blockers: commaArea.blockers.length },
       { name: "comma repo_edit_roots list passes", pass: commaRootList.ok, blockers: commaRootList.blockers.length },
       { name: "semicolon area passes", pass: semicolonArea.ok, blockers: semicolonArea.blockers.length },
       { name: "dirty guard actual path mismatch blocks", pass: !dirtyGuardMismatch.ok && dirtyGuardMismatch.blockers.some((finding) => finding.code === "gate_dirty_guard_path_mismatch"), blockers: dirtyGuardMismatch.blockers.length },
+      { name: "structured dirty guard matching snapshot passes", pass: structuredGuard.ok, blockers: structuredGuard.blockers.length },
+      { name: "structured dirty guard overrides malformed markdown", pass: structuredBeatsMarkdown.ok, blockers: structuredBeatsMarkdown.blockers.length },
+      { name: "structured dirty guard mismatch blocks", pass: !structuredMismatch.ok && structuredMismatch.blockers.some((finding) => finding.code === "gate_dirty_guard_structured_mismatch"), blockers: structuredMismatch.blockers.length },
       { name: "queue mutation dirty blocks", pass: !queueMutation.ok && queueMutation.blockers.some((finding) => finding.code === "gate_queue_mutation_dirty"), blockers: queueMutation.blockers.length },
+      { name: "manager-owned issues dirty allowed", pass: managerQueueMutation.ok, blockers: managerQueueMutation.blockers.length },
+      { name: "dirty snapshot clean ignores live git dirtiness", pass: snapshotClean.ok, blockers: snapshotClean.blockers.length },
+      { name: "dirty snapshot implementation dirtiness blocks", pass: !snapshotDirty.ok && snapshotDirty.blockers.some((finding) => finding.code === "gate_dirty_guard_missing_actual_paths"), blockers: snapshotDirty.blockers.length },
+      { name: "multi-area dirty paths under repo_edit_roots pass", pass: multiAreaDirty.ok, blockers: multiAreaDirty.blockers.length },
+      { name: "out-of-scope prose mention without changed file passes", pass: proseMention.ok, blockers: proseMention.blockers.length },
+      { name: "out-of-scope changed file blocks", pass: !outOfScopeDirty.ok && outOfScopeDirty.blockers.some((finding) => finding.code === "repo_edit_path_outside_roots"), blockers: outOfScopeDirty.blockers.length },
       { name: "round-path alternate root passes", pass: alternateRoot.ok, blockers: alternateRoot.blockers.length },
     ];
     const result = { ok: tests.every((test) => test.pass), tests };
@@ -541,4 +645,37 @@ export function runSelfTest(pretty: boolean): number {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+function setRepoEditRoots(repo: string, seed: string, roots: string) {
+  for (const prompt of ["execute-prompt.md", "implement-a1-prompt.md", "review-r1-a1-prompt.md", "verify-1-prompt.md"]) {
+    const promptPath = join(repo, "tmp/dispatch-work", seed, "round-1", prompt);
+    writeFileSync(promptPath, readFileSync(promptPath, "utf8").replace(/repo_edit_roots="[^"]*"/g, `repo_edit_roots="${roots}"`));
+  }
+}
+
+function writeStructuredDirtyGuardGate(repo: string, seed: string, snapshotPath: string, actualImplPaths: string[], markdownLines?: string[]) {
+  const gatePath = join(repo, "tmp/dispatch-work", seed, "gate.md");
+  const guard = {
+    contract: "dirty_guard.v1",
+    baseline_paths: [],
+    actual_impl_paths: actualImplPaths,
+    queue_paths: [],
+    unexpected_paths: [],
+    snapshot_path: snapshotPath,
+  };
+  const markdown = markdownLines ?? actualImplPaths.map((path) => `- implementation path: \`${path}\``);
+  writeFileSync(
+    gatePath,
+    readFileSync(gatePath, "utf8").replace(
+      "Known dirty paths: none.",
+      [
+        "- command: `git status --porcelain=v1 --untracked-files=all`",
+        ...markdown,
+        "```json",
+        JSON.stringify(guard, null, 2),
+        "```",
+      ].join("\n"),
+    ),
+  );
 }

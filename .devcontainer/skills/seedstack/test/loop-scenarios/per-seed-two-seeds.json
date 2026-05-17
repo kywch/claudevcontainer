@@ -43,11 +43,11 @@
       "seed-fixture-0008a": {
         "decision": "closed",
         "dirty_paths": [
-          "seed-fixture-0008a.txt"
+          "src/seed-fixture-0008a.txt"
         ],
         "write_files": [
           {
-            "path": "seed-fixture-0008a.txt",
+            "path": "src/seed-fixture-0008a.txt",
             "content": "fixture per-seed commit A\n"
           }
         ]
@@ -55,11 +55,11 @@
       "seed-fixture-0008b": {
         "decision": "closed",
         "dirty_paths": [
-          "seed-fixture-0008b.txt"
+          "src/seed-fixture-0008b.txt"
         ],
         "write_files": [
           {
-            "path": "seed-fixture-0008b.txt",
+            "path": "src/seed-fixture-0008b.txt",
             "content": "fixture per-seed commit B\n"
           }
         ]

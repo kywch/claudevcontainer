@@ -120,6 +120,8 @@ Args:
   --expected-seed <path-prefix>    Expected seed-owned dirty path prefix. Repeatable.
   --preexisting <path>             Preexisting dirty path. Repeatable.
   --allow-unexpected-dirty         Pass through dirty classifier allowance.
+  --dirty-status-file <path>       Raw porcelain or dirty_state_snapshot.v1 for dirty checks.
+  --dirty-snapshot <path>          Alias for --dirty-status-file.
   --pretty                         Pretty-print JSON.
   --self-test                      Run fixture tests.
   --help                           Show this help.
@@ -210,6 +212,10 @@ function parseArgs(argv: string[]): Options {
       case "--allow-unexpected-dirty":
         options.allowUnexpectedDirty = true;
         break;
+      case "--dirty-status-file":
+      case "--dirty-snapshot":
+        options.dirtyStatusFile = take();
+        break;
       default:
         if (arg.startsWith("--repo=")) options.repo = arg.slice("--repo=".length);
         else if (arg.startsWith("--seed=")) options.seed = arg.slice("--seed=".length);
@@ -232,6 +238,8 @@ function parseArgs(argv: string[]): Options {
         } else if (arg.startsWith("--seedstack-dir=")) options.seedstackDir = arg.slice("--seedstack-dir=".length);
         else if (arg.startsWith("--expected-seed=")) options.expectedSeeds.push(arg.slice("--expected-seed=".length));
         else if (arg.startsWith("--preexisting=")) options.preexisting.push(arg.slice("--preexisting=".length));
+        else if (arg.startsWith("--dirty-status-file=")) options.dirtyStatusFile = arg.slice("--dirty-status-file=".length);
+        else if (arg.startsWith("--dirty-snapshot=")) options.dirtyStatusFile = arg.slice("--dirty-snapshot=".length);
         else throw new Error(`unknown arg: ${arg}`);
     }
   }
@@ -305,6 +313,7 @@ function runValidation(options: Options): { validation: ValidationResult; comman
   if (options.round) argv.push("--round", options.round);
   if (options.roundPath) argv.push("--round-path", options.roundPath);
   if (options.gate) argv.push("--gate", options.gate);
+  if (options.dirtyStatusFile) argv.push("--dirty-status-file", options.dirtyStatusFile);
 
   const output = runJsonCommand("dispatch-work-validation", argv, options.repo);
   return { validation: output.value as ValidationResult, commands: [output.command] };
@@ -329,7 +338,7 @@ function runDirty(options: Options): { dirty: DirtyResult; command: CommandRecor
   for (const preexisting of options.preexisting) argv.push("--preexisting", preexisting);
   if (options.allowUnexpectedDirty) argv.push("--allow-unexpected");
   argv.push("--dirty-policy", options.commitPolicy === "per_seed" ? "commit" : "strict");
-  if (options.dirtyStatusFile) argv.push("--status-file", options.dirtyStatusFile);
+  if (options.dirtyStatusFile) argv.push("--dirty-snapshot", options.dirtyStatusFile);
   if (options.pretty) argv.push("--pretty");
 
   const output = runJsonCommand("classify-dirty-state", argv, options.repo);
@@ -714,6 +723,7 @@ function inputSummary(options: Options): Record<string, unknown> {
     expected_seed: options.expectedSeeds,
     preexisting: options.preexisting,
     allow_unexpected_dirty: options.allowUnexpectedDirty,
+    dirty_status_file: options.dirtyStatusFile ?? null,
   };
 }
 

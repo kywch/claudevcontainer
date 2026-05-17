@@ -135,10 +135,23 @@ Put command checks in a separate Gate Results or Gate Checks section. Those comm
 gate.md must include a Dirty Guard section with actual implementation paths from \`git status --porcelain=v1 --untracked-files=all\`:
   ## Dirty Guard
   - command: \`git status --porcelain=v1 --untracked-files=all\`
-  - implementation path: \`<each dirty path not under .seeds/ and not under tmp/>\`
-  - queue paths: none
+  - snapshot: \`<dirty_state_snapshot.v1 path or raw status capture path>\`
+  - implementation paths: human-readable summary of actual implementation paths
+  - queue paths: human-readable summary, normally none
+  - unexpected paths: human-readable summary, normally none
+
+  \`\`\`json
+  {
+    "contract": "dirty_guard.v1",
+    "baseline_paths": [],
+    "actual_impl_paths": ["<each dirty path not under .seeds/ and not under tmp/>"],
+    "queue_paths": [],
+    "unexpected_paths": [],
+    "snapshot_path": "<dirty_state_snapshot.v1 path or raw status capture path>"
+  }
+  \`\`\`
 If there are no dirty implementation paths, write \`Known dirty paths: none.\`.
-Do not list placeholder paths. Do not list tmp/dispatch-work paths as implementation paths. Do not mutate .seeds queue paths.
+Do not list placeholder or blank paths. Do not list tmp/dispatch-work paths as implementation paths. Do not mutate .seeds queue paths. The structured \`dirty_guard.v1\` block is authoritative; the markdown text is compatibility only.
 
 verify report (verify-1.md) must include a summary section with next_action field:
   ## Summary

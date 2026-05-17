@@ -26,6 +26,7 @@ import {
 } from "./dispatch-work-contracts.ts";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readDirtyStatusText } from "../../seedstack/scripts/snapshot-dirty-state.ts";
 
 export type { ReportRecord, ReportRole } from "./validate-dispatch-work-reports.ts";
 
@@ -52,6 +53,8 @@ type Args = {
   allowRunning: boolean;
   allowNonlatest: boolean;
   validationPolicy: ValidationPolicy;
+  queueMutationContext: "dispatch" | "manager";
+  dirtyStatusFile?: string;
 };
 
 type StatusRecord = {
@@ -78,6 +81,15 @@ type GateRecord = {
   decision?: string;
   acceptedPaths: string[];
   acceptedRows: GateAcceptedRow[];
+};
+
+type DirtyGuardRecord = {
+  contract: "dirty_guard.v1";
+  baseline_paths: string[];
+  actual_impl_paths: string[];
+  queue_paths: string[];
+  unexpected_paths: string[];
+  snapshot_path: string;
 };
 
 type ArtifactLocation = {
@@ -141,6 +153,10 @@ Args:
   --allow-running           Do not block on starting/running status states.
   --allow-nonlatest         Permit validating a non-latest round.
   --validation-policy <p>   strict|loop. Default: strict.
+  --queue-mutation-context <dispatch|manager>
+                            Queue dirty owner context. Default: dispatch.
+  --dirty-status-file <p>   Read dirty guard status from raw porcelain or dirty_state_snapshot.v1.
+  --dirty-snapshot <p>      Alias for --dirty-status-file.
   --pretty                  Pretty-print JSON.
   --self-test               Run built-in fixture tests.
   --help                    Show this help.
@@ -160,6 +176,7 @@ export function parseArgs(argv: string[]): Args {
     allowRunning: false,
     allowNonlatest: false,
     validationPolicy: "strict",
+    queueMutationContext: "dispatch",
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -206,6 +223,16 @@ export function parseArgs(argv: string[]): Args {
         args.validationPolicy = policy;
         break;
       }
+      case "--queue-mutation-context": {
+        const context = next();
+        if (context !== "dispatch" && context !== "manager") throw new Error("--queue-mutation-context must be dispatch or manager");
+        args.queueMutationContext = context;
+        break;
+      }
+      case "--dirty-status-file":
+      case "--dirty-snapshot":
+        args.dirtyStatusFile = next();
+        break;
       case "--pretty":
         args.pretty = true;
         break;
@@ -221,6 +248,20 @@ export function parseArgs(argv: string[]): Args {
           const policy = arg.slice("--validation-policy=".length);
           if (policy !== "strict" && policy !== "loop") throw new Error("--validation-policy must be strict or loop");
           args.validationPolicy = policy;
+          break;
+        }
+        if (arg.startsWith("--dirty-status-file=")) {
+          args.dirtyStatusFile = arg.slice("--dirty-status-file=".length);
+          break;
+        }
+        if (arg.startsWith("--queue-mutation-context=")) {
+          const context = arg.slice("--queue-mutation-context=".length);
+          if (context !== "dispatch" && context !== "manager") throw new Error("--queue-mutation-context must be dispatch or manager");
+          args.queueMutationContext = context;
+          break;
+        }
+        if (arg.startsWith("--dirty-snapshot=")) {
+          args.dirtyStatusFile = arg.slice("--dirty-snapshot=".length);
           break;
         }
         throw new Error(`unknown arg: ${arg}`);
@@ -258,6 +299,7 @@ function normalizeArgs(args: Args): Args {
     roundPath,
     dispatchRoot,
     gate: args.gate && args.gate !== "none" ? resolve(repo, args.gate) : args.gate,
+    dirtyStatusFile: args.dirtyStatusFile ? resolve(repo, args.dirtyStatusFile) : undefined,
   };
 }
 
@@ -321,7 +363,7 @@ export function validateDispatch(inputArgs: Args): ValidationResult {
   if (!files.some((file) => file.endsWith(`${sep}${BASENAMES.executorReport}`))) {
     add("blocker", "missing_execute_report", "executor-report.md missing", roundPath);
   }
-  validateSeedAreaArtifacts(args, seed, dispatchPath, roundPath, files, add);
+  validateTypedRootScope(args, seed, dispatchPath, roundPath, files, add);
 
   summary.artifactIndexes.checked = files.filter(isIndexFile).length;
   summary.artifactIndexes.rows = 0;
@@ -471,7 +513,7 @@ function isIndexFile(file: string): boolean {
   return /(^|-)artifact-index\.(md|json)$/.test(base) || base === "artifact-index.md" || base === "artifact-index.json";
 }
 
-function validateSeedAreaArtifacts(
+function validateTypedRootScope(
   args: Args,
   seed: string,
   dispatchPath: string,
@@ -480,7 +522,6 @@ function validateSeedAreaArtifacts(
   add: (level: Level, code: string, message: string, path?: string) => void,
 ) {
   const areas = seed ? seedAreas(args.repo, seed) : [];
-  if (areas.length === 0) return;
   const topLevelDispatchFiles = existsSync(dispatchPath)
     ? readdirSync(dispatchPath, { withFileTypes: true })
       .filter((entry) => entry.isFile() && /\.(md|txt)$/.test(entry.name))
@@ -495,27 +536,19 @@ function validateSeedAreaArtifacts(
   for (const file of files) {
     const raw = readSmallArtifact(file, statSync(file).size);
     if (!raw) continue;
-    for (const root of implementationRoots(raw)) {
-      if (isDispatchArtifactRoot(args.repo, dispatchPath, root)) continue;
-      if (matchesAnyImplementationAreaRoot(root, areas)) continue;
-      add(
-        "blocker",
-        "artifact_impl_root_mismatch",
-        `artifact mentions implementation root ${root}, but seed areas are ${areas.join(", ")}`,
-        file,
-      );
-    }
-    for (const root of scopedArtifactRoots(raw)) {
+    if (areas.length === 0) continue;
+    for (const root of scopedRepoEditRoots(raw)) {
       if (isDispatchArtifactRoot(args.repo, dispatchPath, root)) continue;
       if (matchesAnyScopedAreaRoot(root, areas)) continue;
       add(
         "blocker",
         "artifact_impl_root_mismatch",
-        `artifact mentions implementation root ${root}, but seed areas are ${areas.join(", ")}`,
+        `artifact repo_edit_roots includes ${root}, but seed areas are ${areas.join(", ")}`,
         file,
       );
     }
   }
+  validateActualRepoEditPaths(args, dispatchPath, files, add);
 }
 
 function isDispatchArtifactRoot(repo: string, dispatchPath: string, root: string): boolean {
@@ -565,48 +598,7 @@ function areaAliases(area: string): string[] {
   }
 }
 
-function implementationRoots(raw: string): Set<string> {
-  const roots = new Set<string>();
-  let referenceOnlyBlock = false;
-  for (const line of raw.split(/\r?\n/)) {
-    if (/^\s*(?:source_refs?|target_gates?|gates?|tests?)\s*:/i.test(line)) referenceOnlyBlock = true;
-    else if (/^\S[^:]*:\s*/.test(line)) referenceOnlyBlock = false;
-    if (/\.tmp\/seedspec\b/.test(line)) continue;
-    if (/\b(old|older|historical|pre-v\d+|forbid|forbids|forbidden|not|avoid|conflict|conflicts)\b/i.test(line)) continue;
-    for (const match of line.matchAll(/\b(impl(?:_[A-Za-z0-9.-]+)?\/[A-Za-z0-9._-]+)(?=\/|\b)/g)) {
-      const root = normalizeArea(match[1]);
-      if (root === "impl/test") continue;
-      if (referenceOnlyBlock) continue;
-      if (isReferenceOnlyImplementationRoot(line, root)) continue;
-      roots.add(root);
-    }
-  }
-  return roots;
-}
-
-function isReferenceOnlyImplementationRoot(line: string, root: string): boolean {
-  const escaped = escapeRegExp(root);
-  const commandUse = new RegExp(`\\b(?:make\\s+-C|cd)\\s+${escaped}(?:\\s|$)`);
-  if (commandUse.test(line)) return true;
-  if (/^\s*(?:[-*]\s*)?(?:source_refs?|target_gates?|gates?|tests?|command)\s*:/i.test(line)) return true;
-  if (new RegExp(`\\bfrom\\s+\`${escaped}/`).test(line)) return true;
-  if (
-    new RegExp(`^\\s*[-*]\\s*\`${escaped}/`).test(line) &&
-    !/\b(changed_files?|implementation path|allowed_write_roots|edit(?:ed)?|owns?)\b/i.test(line)
-  ) return true;
-  if (
-    new RegExp(`\`${escaped}/`).test(line) &&
-    /\b(states?|handles?|has|guard(?:ed|s)?|documents?|advertises?|at|evidence|credibility)\b/i.test(line) &&
-    !/\b(changed_files?|implementation path|allowed_write_roots|edit(?:ed)?|owns?)\b/i.test(line)
-  ) return true;
-  return false;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function scopedArtifactRoots(raw: string): Set<string> {
+function scopedRepoEditRoots(raw: string): Set<string> {
   const roots = new Set<string>();
   let hasRepoEditRoots = false;
   for (const match of raw.matchAll(/repo_edit_roots\s*=\s*["']([^"']*)["']/g)) {
@@ -618,10 +610,48 @@ function scopedArtifactRoots(raw: string): Set<string> {
       for (const token of splitRootList(match[1])) addScopedRoot(roots, token);
     }
   }
-  for (const match of raw.matchAll(/(?:\bowns?\b|edit only|write scope)[^`\n]*`([^`]+?)(?:\/\*\*)?`/gi)) {
-    addScopedRoot(roots, match[1]);
-  }
   return roots;
+}
+
+function validateActualRepoEditPaths(
+  args: Args,
+  dispatchPath: string,
+  roundFiles: string[],
+  add: (level: Level, code: string, message: string, path?: string) => void,
+) {
+  const actual = repoDirtyImplementationPaths(args);
+  if (!actual) return;
+  if (actual.length === 0) return;
+
+  const roots = collectRepoEditRoots(args, dispatchPath, roundFiles);
+  for (const path of actual) {
+    if (roots.some((root) => pathMatchesRoot(path, root))) continue;
+    const rootList = roots.length > 0 ? roots.join(", ") : "<none>";
+    add("blocker", "repo_edit_path_outside_roots", `changed repo path ${path} is outside repo_edit_roots ${rootList}`, dispatchPath);
+  }
+}
+
+function collectRepoEditRoots(args: Args, dispatchPath: string, roundFiles: string[]): string[] {
+  const roots = new Set<string>();
+  const topLevelDispatchFiles = existsSync(dispatchPath)
+    ? readdirSync(dispatchPath, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.(md|txt)$/.test(entry.name))
+      .map((entry) => join(dispatchPath, entry.name))
+    : [];
+  const files = [
+    join(dispatchPath, BASENAMES.packet),
+    join(dispatchPath, BASENAMES.gate),
+    ...topLevelDispatchFiles,
+    ...roundFiles.filter((file) => /\.(md|txt)$/.test(file) && /(prompt|report|verify|review|executor)/.test(file)),
+  ].filter((file, index, all) => existsSync(file) && all.indexOf(file) === index);
+  for (const file of files) {
+    const raw = readSmallArtifact(file, statSync(file).size);
+    for (const root of scopedRepoEditRoots(raw)) {
+      if (isDispatchArtifactRoot(args.repo, dispatchPath, root)) continue;
+      roots.add(root);
+    }
+  }
+  return [...roots].sort();
 }
 
 function splitRootList(value: string): string[] {
@@ -669,6 +699,12 @@ function sameAreaRoot(root: string, area: string): boolean {
     normalizedRoot === `${normalizedArea}.md` ||
     normalizedRoot.startsWith(`${normalizedArea}/`)
   );
+}
+
+function pathMatchesRoot(path: string, root: string): boolean {
+  const normalizedPath = normalizeArea(path);
+  const normalizedRoot = normalizeArea(root);
+  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
 }
 
 function validateStatus(
@@ -1252,12 +1288,18 @@ function validateGateDirtyGuard(
   gateText: string,
   add: (level: Level, code: string, message: string, path?: string) => void,
 ) {
-  const queueMutations = repoDirtyQueuePaths(args.repo);
+  const structured = parseStructuredDirtyGuard(gateText, gatePath, add);
+  if (structured) {
+    validateStructuredDirtyGuard(args, gatePath, structured, add);
+    return;
+  }
+
+  const queueMutations = repoDirtyQueuePaths(args);
   if (queueMutations && queueMutations.length > 0) {
     add("blocker", "gate_queue_mutation_dirty", `dispatch-work must not mutate queue state paths: ${queueMutations.join(", ")}`, gatePath);
   }
 
-  const actual = repoDirtyImplementationPaths(args.repo);
+  const actual = repoDirtyImplementationPaths(args);
   if (!actual) {
     add("warning", "gate_dirty_guard_unchecked", "git status unavailable; dirty guard path match not checked", gatePath);
     return;
@@ -1279,25 +1321,204 @@ function validateGateDirtyGuard(
   }
 }
 
-function repoDirtyImplementationPaths(repo: string): string[] | undefined {
-  return repoDirtyPaths(repo, (path) => !path.startsWith(".seeds/") && !path.startsWith("tmp/"));
+function parseStructuredDirtyGuard(
+  gateText: string,
+  gatePath: string,
+  add: (level: Level, code: string, message: string, path?: string) => void,
+): DirtyGuardRecord | undefined {
+  const raw = structuredDirtyGuardRaw(gateText);
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = raw.trim().startsWith("{") ? JSON.parse(raw) : parseYamlLikeDirtyGuard(raw);
+  } catch (error) {
+    add("blocker", "gate_dirty_guard_structured_malformed", `dirty_guard.v1 parse failed: ${(error as Error).message}`, gatePath);
+    return undefined;
+  }
+  if (!isRecord(parsed)) {
+    add("blocker", "gate_dirty_guard_structured_malformed", "dirty_guard.v1 block must be object", gatePath);
+    return undefined;
+  }
+  if (parsed.contract !== "dirty_guard.v1") {
+    add("blocker", "gate_dirty_guard_structured_malformed", "dirty_guard.v1 block missing contract", gatePath);
+    return undefined;
+  }
+  const record: Partial<DirtyGuardRecord> = { contract: "dirty_guard.v1" };
+  for (const key of ["baseline_paths", "actual_impl_paths", "queue_paths", "unexpected_paths"] as const) {
+    const value = parsed[key];
+    if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+      add("blocker", "gate_dirty_guard_structured_malformed", `dirty_guard.v1 ${key} must be string array`, gatePath);
+      continue;
+    }
+    record[key] = value.map((item) => normalizePath(item.trim()) ?? "");
+  }
+  if (typeof parsed.snapshot_path !== "string" || parsed.snapshot_path.trim().length === 0) {
+    add("blocker", "gate_dirty_guard_structured_malformed", "dirty_guard.v1 snapshot_path must be nonempty string", gatePath);
+  } else {
+    record.snapshot_path = normalizePath(parsed.snapshot_path.trim()) ?? parsed.snapshot_path.trim();
+  }
+  return record.baseline_paths && record.actual_impl_paths && record.queue_paths && record.unexpected_paths && record.snapshot_path
+    ? (record as DirtyGuardRecord)
+    : undefined;
 }
 
-function repoDirtyQueuePaths(repo: string): string[] | undefined {
-  return repoDirtyPaths(repo, (path) => path.startsWith(".seeds/") && path !== ".seeds/knowledge.jsonl");
+function structuredDirtyGuardRaw(gateText: string): string | undefined {
+  const fence = /```(?:json|dirty_guard\.v1)?\s*\r?\n([\s\S]*?"contract"\s*:\s*"dirty_guard\.v1"[\s\S]*?)\r?\n```/m.exec(gateText);
+  if (fence) return fence[1];
+  const yaml = /(?:^|\n)dirty_guard\.v1:\s*\r?\n([\s\S]*?)(?=\n#{1,6}\s|\n```|$)/m.exec(gateText);
+  if (yaml) return `contract: dirty_guard.v1\n${yaml[1]}`;
+  const legacyYaml = dirtyGuardBlock(gateText);
+  return /\bcontract:\s*dirty_guard\.v1\b/.test(legacyYaml) ? legacyYaml : undefined;
 }
 
-function repoDirtyPaths(repo: string, include: (path: string) => boolean): string[] | undefined {
-  const git = spawnSync("git", ["-C", repo, "status", "--porcelain=v1", "--untracked-files=all"], {
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
+function parseYamlLikeDirtyGuard(raw: string): DirtyGuardRecord {
+  const out: Record<string, unknown> = {};
+  const lines = raw.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const scalar = /^\s*([a-z_]+)\s*:\s*(.*?)\s*$/.exec(line);
+    if (!scalar) continue;
+    const key = scalar[1];
+    const value = scalar[2];
+    if (value.startsWith("[") && value.endsWith("]")) {
+      out[key] = JSON.parse(value.replace(/'/g, '"'));
+      continue;
+    }
+    if (["baseline_paths", "actual_impl_paths", "queue_paths", "unexpected_paths"].includes(key)) {
+      const values: string[] = [];
+      for (let j = index + 1; j < lines.length; j += 1) {
+        const item = /^\s*-\s*(.*?)\s*$/.exec(lines[j]);
+        if (!item) break;
+        values.push(stripOptional(item[1]) ?? "");
+        index = j;
+      }
+      out[key] = values;
+    } else {
+      out[key] = stripOptional(value) ?? value;
+    }
+  }
+  return out as DirtyGuardRecord;
+}
+
+function validateStructuredDirtyGuard(
+  args: Args,
+  gatePath: string,
+  guard: DirtyGuardRecord,
+  add: (level: Level, code: string, message: string, path?: string) => void,
+) {
+  validateGuardPathList("baseline_paths", guard.baseline_paths, gatePath, add);
+  validateGuardPathList("actual_impl_paths", guard.actual_impl_paths, gatePath, add);
+  validateGuardPathList("queue_paths", guard.queue_paths, gatePath, add);
+  validateGuardPathList("unexpected_paths", guard.unexpected_paths, gatePath, add);
+
+  for (const path of guard.actual_impl_paths) {
+    if (!isExpectedSeedPath(path)) {
+      add("blocker", "gate_dirty_guard_invalid_impl_path", `dirty_guard.v1 actual_impl_paths contains invalid implementation path: ${path || "<blank>"}`, gatePath);
+    }
+  }
+
+  const actualImpl = repoDirtyImplementationPaths(args);
+  const queuePaths = repoDirtyQueuePaths(args);
+  const allPaths = repoDirtyPaths(args, () => true);
+  if (!actualImpl || !queuePaths || !allPaths) {
+    add("warning", "gate_dirty_guard_unchecked", "git status unavailable; dirty guard path match not checked", gatePath);
+    return;
+  }
+
+  comparePathSet("actual_impl_paths", guard.actual_impl_paths, actualImpl, gatePath, add);
+  comparePathSet("queue_paths", guard.queue_paths, queuePaths, gatePath, add);
+  comparePathSet("unexpected_paths", guard.unexpected_paths, expectedUnexpectedDirtyPaths(allPaths, guard, queuePaths, actualImpl), gatePath, add);
+
+  if (args.dirtyStatusFile) {
+    const expectedSnapshot = normalizeRepoRelative(args.repo, args.dirtyStatusFile);
+    if (normalizeRepoRelative(args.repo, guard.snapshot_path) !== expectedSnapshot) {
+      add(
+        "blocker",
+        "gate_dirty_guard_snapshot_mismatch",
+        `dirty_guard.v1 snapshot_path ${guard.snapshot_path} does not match ${expectedSnapshot}`,
+        gatePath,
+      );
+    }
+  }
+}
+
+function validateGuardPathList(
+  key: keyof Pick<DirtyGuardRecord, "baseline_paths" | "actual_impl_paths" | "queue_paths" | "unexpected_paths">,
+  paths: string[],
+  gatePath: string,
+  add: (level: Level, code: string, message: string, path?: string) => void,
+) {
+  for (const path of paths) {
+    if (isPlaceholderPath(path)) {
+      add("blocker", "gate_dirty_guard_placeholder_path", `dirty_guard.v1 ${key} contains placeholder path: ${path || "<blank>"}`, gatePath);
+    }
+  }
+}
+
+function expectedUnexpectedDirtyPaths(allPaths: string[], guard: DirtyGuardRecord, queuePaths: string[], actualImpl: string[]): string[] {
+  const known = new Set([...guard.baseline_paths, ...queuePaths, ...actualImpl]);
+  return allPaths
+    .filter((path) => !known.has(path))
+    .filter((path) => path !== ".seeds/knowledge.jsonl")
+    .filter((path) => !path.startsWith("tmp/dispatch-work/") && !path.startsWith("tmp/seedstack/"))
+    .sort();
+}
+
+function comparePathSet(
+  key: keyof Pick<DirtyGuardRecord, "actual_impl_paths" | "queue_paths" | "unexpected_paths">,
+  actual: string[],
+  expected: string[],
+  gatePath: string,
+  add: (level: Level, code: string, message: string, path?: string) => void,
+) {
+  const left = [...new Set(actual)].sort();
+  const right = [...new Set(expected)].sort();
+  if (left.join("\0") === right.join("\0")) return;
+  add(
+    "blocker",
+    "gate_dirty_guard_structured_mismatch",
+    `dirty_guard.v1 ${key} ${left.join(", ") || "<none>"} does not match dirty snapshot ${right.join(", ") || "<none>"}`,
+    gatePath,
+  );
+}
+
+function isPlaceholderPath(path: string): boolean {
+  return path.trim().length === 0 || /^(?:none|n\/a|null|undefined|todo|placeholder|path)$/i.test(path) || /[<>]/.test(path);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function repoDirtyImplementationPaths(args: Args): string[] | undefined {
+  return repoDirtyPaths(args, (path) => !path.startsWith(".seeds/") && !path.startsWith("tmp/"));
+}
+
+function repoDirtyQueuePaths(args: Args): string[] | undefined {
+  return repoDirtyPaths(args, (path) => {
+    if (!path.startsWith(".seeds/") || path === ".seeds/knowledge.jsonl") return false;
+    if (args.queueMutationContext === "manager" && path === ".seeds/issues.jsonl") return false;
+    return true;
   });
-  if (git.status !== 0 || git.error) return undefined;
+}
+
+function repoDirtyPaths(args: Args, include: (path: string) => boolean): string[] | undefined {
+  let statusText: string;
+  if (args.dirtyStatusFile) {
+    statusText = readDirtyStatusText(args.dirtyStatusFile);
+  } else {
+    const git = spawnSync("git", ["-C", args.repo, "status", "--porcelain=v1", "--untracked-files=all"], {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+    });
+    if (git.status !== 0 || git.error) return undefined;
+    statusText = git.stdout;
+  }
   const paths = new Set<string>();
-  for (const line of git.stdout.split(/\r?\n/)) {
+  for (const line of statusText.split(/\r?\n/)) {
     if (!line.trim()) continue;
     const raw = line.slice(3).split(" -> ").at(-1)?.trim();
-    const path = cleanStatusPath(raw, repo);
+    const path = cleanStatusPath(raw, args.repo);
     if (!path || !include(path)) continue;
     paths.add(path);
   }

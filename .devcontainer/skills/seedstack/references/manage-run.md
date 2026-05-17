@@ -31,6 +31,49 @@ All split operations are structural mutations and require explicit user
 approval. Dispatch may propose a split, but manage applies it only after user
 choice.
 
+## Operator Packets
+
+Operator packets are advisory run artifacts for bounded subagent diagnostics.
+Persist them under the current run artifact directory, not under `.seeds/**`:
+
+```text
+operator/
+  operator_run.json
+  preflight.packet.json
+  artifacts.packet.json
+  verifier.packet.json
+  recovery.packet.json
+  knowledge.packet.json
+  operator_summary.json
+```
+
+Operator scopes:
+
+- `preflight`: environment, backend, manifest, credentials, and config validity.
+- `artifacts`: required artifacts, schema validity, redaction, and trajectory.
+- `verifier`: verifier failure classification and false-positive suspicion.
+- `recovery`: next safe action proposal; no execution.
+- `knowledge`: reusable lessons with evidence refs.
+
+Every packet uses `packet_version: "operator.v1"`, the matching `operator`
+value, `run_id`, optional `task_id`, `seed`, `trial_id`, optional
+`queue_snapshot_id`, `readonly: true`, `status: ok|warn|fail|blocked`,
+`findings[]`, and `recommendations[]`. Recommendations must set
+`queue_mutation_allowed: false` unless `owner` is `main_agent`; even then, the
+packet is only evidence for a later main-agent/Seedstack decision.
+
+Validate packet sets with:
+
+```bash
+bun skills/seedstack/scripts/check-operator-packets.ts --operator-dir tmp/seedstack/<slug>/operator --pretty
+```
+
+Invalid packets are discarded and reported by the checker. Conflicting
+recommendations for the same target block automatic queue mutation. Operator
+subagents never mutate queue files, run the queue CLI, or execute recovery
+actions. The main agent receives only `operator/operator_summary.json` as
+compact context and keeps queue mutation Seedstack-owned.
+
 ## Mutation Eligibility
 
 Allowed through work queue CLI only:
@@ -54,6 +97,40 @@ Forbidden:
 
 Run graph checks before and after dependency repair. Abort with `graph_drift`
 on mismatched work order ids, statuses, deps, labels, or priorities.
+
+## Knowledge Lifecycle
+
+`.seeds/knowledge.jsonl` is the append-only knowledge log. Existing records are
+never rewritten, sorted, compacted, or deleted during Seedstack/Dispatch runs.
+Each capture attempt records exactly one lifecycle state in the relevant
+dispatch, manage, or run artifact:
+
+- `recorded`: at least one qualified record was appended to
+  `.seeds/knowledge.jsonl`.
+- `none_qualified`: the capture step ran, but no candidate passed the
+  knowledge recording gate.
+- `store_missing`: `.seeds/knowledge.jsonl` or required store setup was absent;
+  no store was initialized as a side effect.
+- `skipped_user_waived`: user explicitly waived capture for this point.
+
+Capture points:
+
+- after a clean seed close is reconciled by manage mode
+- after an escalation is resolved by retry, user decision, split, follow-up, or
+  accepted stop disposition
+- after run terminal `done`, before final run summary
+
+Ownership boundary:
+
+| actor | may mutate `.seeds/issues.jsonl` and queue files | may mutate `.seeds/knowledge.jsonl` | notes |
+| --- | --- | --- | --- |
+| Dispatch child | no | no | queue context and knowledge store are read-only; it may write dispatch artifacts only |
+| Manage child | through work queue CLI only | no | no direct `.seeds/**` writes |
+| Supervisor/current agent | queue CLI, run/manage artifacts, commits | no | records capture state; does not append knowledge directly |
+| `capture-knowledge` | no | append only | sole writer for `.seeds/knowledge.jsonl` |
+
+Knowledge capture dirties only `.seeds/knowledge.jsonl`. Any other `.seeds/**`
+dirty path from a capture step is unexpected and blocks normal continuation.
 
 Out-of-plan seed creation or dependency reshaping requires a plan-change event
 before mutation. Record origin, scope, acceptance, gates, deps, adoption impact,
@@ -174,6 +251,141 @@ reconciled by manage mode or recorded as unreconciled in `run-state.json`
 before stop.
 On resume, use canonical state per above; reconcile any active or unreconciled
 dispatch before selecting another seed.
+
+## Recovery Runbook
+
+Use this sequence when a Seedstack run stops, resumes after interruption, or
+has unclear local state. These commands are read-only until the final
+`update-run-state.ts` step.
+
+1. Scan queue:
+
+```bash
+bun skills/seedstack/scripts/scan-seedspec-cli.ts \
+  --repo . \
+  --cli sd \
+  --adoption-selection tmp/seedstack/<slug>/adoption-selection.json \
+  --pretty
+```
+
+2. Check adoption selection:
+
+```bash
+bun skills/seedstack/scripts/check-adoption-selection.ts \
+  --adoption-selection tmp/seedstack/<slug>/adoption-selection.json \
+  --scan-file tmp/seedstack/<slug>/scan.json \
+  --pretty
+```
+
+3. Classify dirty state before any dispatch, manage, commit, or state update:
+
+```bash
+bun skills/seedstack/scripts/classify-dirty-state.ts \
+  --repo . \
+  --seed <work-id> \
+  --seedstack-dir tmp/seedstack/<slug> \
+  --dirty-policy loop \
+  --pretty
+```
+
+Use `--dirty-policy commit` only for the per-seed commit checkpoint after
+manage reconciliation. Unexpected dirty paths block recovery until the user
+reviews or resolves them. Do not hide them as preexisting unless they were
+captured before the run step that produced the stop.
+
+4. Validate dispatch result when `run-state.json` is `dispatching` or the
+latest dispatch has not been reconciled:
+
+```bash
+bun skills/seedstack/scripts/check-dispatch-reconcile.ts \
+  --seed <work-id> \
+  --seedstack-dir tmp/seedstack/<slug> \
+  --commit-policy none \
+  --pretty
+```
+
+Continue only on `decision: "manage_reconcile"`. Blocked decisions require
+manage/escalation handling, not another dispatch.
+
+5. Reconcile dispatch through manage mode. Manage must consume the
+`dispatch_reconcile_check.v1` result, write its decision/result artifacts, and
+apply any queue mutation only through the work queue CLI. Never hand-edit
+`.seeds/**`.
+
+6. Check the proposed run transition:
+
+```bash
+bun skills/seedstack/scripts/check-run-transition.ts \
+  --run-state tmp/seedstack/<slug>/run-state.json \
+  --next-state <idle|dispatching|done|blocked|escalated|loop_cap> \
+  --seed <work-id> \
+  --scan-file tmp/seedstack/<slug>/scan.json \
+  --adoption-check tmp/seedstack/<slug>/adoption-check.json \
+  --dirty-result tmp/seedstack/<slug>/dirty.json \
+  --reconcile-result tmp/seedstack/<slug>/reconcile.json \
+  --pretty
+```
+
+7. Check commit ledger before leaving a per-seed clean close:
+
+```bash
+bun skills/seedstack/scripts/check-commit-ledger.ts \
+  --seedstack-dir tmp/seedstack/<slug> \
+  --seed <work-id> \
+  --pretty
+```
+
+For `commit_policy: "per_seed"` and `latest_dispatch.status:
+"closed_clean"`, do not transition back to idle/done while
+`latest_dispatch.commit_pending` is true.
+
+8. Update run state only through the approved script after the transition
+checker approves:
+
+```bash
+bun skills/seedstack/scripts/update-run-state.ts \
+  --seedstack-dir tmp/seedstack/<slug> \
+  --state <state> \
+  --seed <work-id> \
+  --pretty
+```
+
+`run-state.json` is canonical and `run.md` is the generated human view. Do not
+edit either file by hand during recovery.
+
+The advisory checker can identify the next safe command without writing:
+
+```bash
+bun skills/seedstack/scripts/check-recovery-state.ts \
+  --seedstack-dir tmp/seedstack/<slug> \
+  --scan-file tmp/seedstack/<slug>/scan.json \
+  --adoption-check tmp/seedstack/<slug>/adoption-check.json \
+  --dirty-result tmp/seedstack/<slug>/dirty.json \
+  --reconcile-result tmp/seedstack/<slug>/reconcile.json \
+  --run-transition tmp/seedstack/<slug>/transition.json \
+  --commit-check tmp/seedstack/<slug>/commit-check.json \
+  --pretty
+```
+
+It emits `recovery_check.v1` with `next_safe_command`. It is advisory only,
+does not mutate queue or run artifacts, and is not wired into
+`seedstack-loop.ts`.
+
+Recovery decisions:
+
+- `scan_required`: run the queue scan first.
+- `adoption_check_required`: validate adoption before choosing work.
+- `dirty_check_required`: classify worktree state before recovery action.
+- `blocked_dirty`: stop; unexpected dirty paths need user review/resolution.
+- `reconcile_required`: validate the in-flight dispatch before any new work.
+- `run_transition_required`: run the transition checker.
+- `commit_ledger_required`: verify per-seed commit ledger before leaving
+  manage.
+- `dispatch_allowed`: transition to `dispatching` via `update-run-state.ts`,
+  then invoke dispatch-work for the explicit seed.
+- `run_state_update_required`: apply the approved state transition through
+  `update-run-state.ts`.
+- `no_op`: terminal state such as `done`; do not mutate state.
 
 Seed creation dirties `.seeds/issues.jsonl` and sometimes related queue files.
 The required workflow is: create seeds -> commit queue baseline -> run auto.

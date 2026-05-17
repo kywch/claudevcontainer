@@ -112,8 +112,8 @@ No copied docs beyond short clause refs.
 
 Before `gate.md`, Dispatcher validates: required files exist and are nonempty,
 latest-round artifacts are exclusive, lowercase role-specific status values are
-valid, gate records are present, waivers are present or explicitly absent, dirty guard
-is recorded, and all accepted dispatch artifact paths from the `## Evidence`
+valid, gate records are present, waivers are present or explicitly absent,
+`dirty_guard.v1` is recorded when available, and all accepted dispatch artifact paths from the `## Evidence`
 or `## Evidence Paths` table are under repo-root-relative
 `tmp/dispatch-work/<work-id>/`. Gate command/result tables are separate evidence
 about checks run; their command, cwd, source, and implementation path columns are
@@ -128,15 +128,20 @@ Round child prompt/report path validation requires the `path_manifest` generated
 from `scripts/dispatch-work-paths.ts` before task text. `io_policy`,
 `launch_provenance`, `child_artifact_contract`, and task prose path references
 must match manifest values byte-for-byte. Derived, shortened, renamed, or
-relocated dispatch paths are invalid. `artifact_write_roots` and
-`repo_edit_roots` are validated separately: `child_writes=report_only` allows
-only assigned dispatch report writes under `artifact_write_roots`; Implement may
-edit repo files only under `repo_edit_roots`.
+relocated dispatch paths are invalid. `repo_edit_roots`,
+`artifact_write_roots`, `dispatch_artifact_roots`, `seedstack_artifact_roots`,
+and `gate_artifacts` are validated as typed roots:
+`child_writes=report_only` allows only assigned dispatch report writes under
+artifact roots; Implement may edit repo files only under `repo_edit_roots`.
 Root lists accept whitespace or semicolon separators. Dispatch artifacts
 (`tmp/dispatch-work/**`), seedstack artifacts (`tmp/seedstack/**`), and
 `.seeds/**` are excluded from implementation-root checks. Legacy
 `allowed_write_roots` remains accepted for old artifacts, but typed
 `repo_edit_roots` wins when present.
+Source refs, commands, gate command paths, research notes, and prose examples
+are not edit evidence. Actual changed repo paths from the dirty
+snapshot/status must fall under `repo_edit_roots`; out-of-scope prose mentions
+alone do not block.
 
 Child run validation also requires: status path exists, launch evidence path
 exists, prompt/log/report paths are repo-root-relative under
@@ -252,7 +257,12 @@ state, and stale heartbeat for heartbeat-enabled supervised runs.
   why out-of-boundary, later owner work order id, carry-forward gate
 - blockers and cleanup/hardening: fixed, waived, deferred with rationale, or
   escalated
-- dirty guard result and known dirty paths
+- dirty guard result and known dirty paths. New gates use structured
+  `dirty_guard.v1` as authority with `baseline_paths`, `actual_impl_paths`,
+  `queue_paths`, `unexpected_paths`, and `snapshot_path`; markdown Dirty Guard
+  text remains human-readable compatibility only. Placeholder or blank
+  implementation paths are invalid. Legacy markdown guards remain accepted only
+  when the structured block is absent.
 - unresolved risk and final rationale
 
 Done and escalate are terminal and exclusive. Follow-up proposals are
@@ -260,8 +270,15 @@ nonterminal data for `seedstack` manage mode.
 
 ## Knowledge Capture
 
+`.seeds/knowledge.jsonl` is an append-only knowledge log. It is the only
+`.seeds/**` path knowledge capture may dirty, and only by appending records.
+Dispatcher, Execute, Implement, Review, Verify, and dispatch children must not
+mutate it directly.
+
 `knowledge-capture.md` records:
 
+- capture_state:
+  `recorded|none_qualified|store_missing|skipped_user_waived`
 - existing store count and merge setup check for `.seeds/.gitattributes`
 - marker scan result
 - candidate records considered
@@ -270,9 +287,12 @@ nonterminal data for `seedstack` manage mode.
 - store count before/after and record command outputs
 
 Final Dispatcher reports include a `Knowledge Capture` block with
-`knowledge-capture.md`, accepted IDs, rejected count, marker count, and final
-store count. If no candidate passes, record zero accepted IDs rather than
-omitting the block.
+`knowledge-capture.md`, capture_state, accepted IDs, rejected count, marker
+count, and final store count. If no candidate passes, record
+`capture_state=none_qualified` and zero accepted IDs rather than omitting the
+block. If the store is absent and not initialized, record
+`capture_state=store_missing`. If the user explicitly waives capture, record
+`capture_state=skipped_user_waived` with scope and approver.
 
 ## Completion Barrier
 
@@ -286,7 +306,8 @@ Before reporting local done, Dispatcher must satisfy Gate Decisions in
 2. Write `gate.md` and capture path, mtime when available, decision, and
    completion timestamp.
 3. Confirm no queue mutation was performed by dispatch-work. `.seeds/**`
-   mutations are allowed only for explicit knowledge capture.
+   mutations are allowed only when `capture-knowledge` appended
+   `.seeds/knowledge.jsonl`.
 4. Write `tmp/dispatch-work/<work-id>/events/<seq>-done.json` with artifact
    paths and validation summary before the final Dispatcher report.
 

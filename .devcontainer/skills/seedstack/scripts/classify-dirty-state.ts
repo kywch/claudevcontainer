@@ -5,12 +5,13 @@
 // external dependencies.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { resolve, relative } from "node:path";
+import { readDirtyStatusText } from "./snapshot-dirty-state.ts";
 
 type Classification =
   | "preexisting_user"
   | "dispatcher_owned"
+  | "capture_owned"
   | "expected_artifact"
   | "expected_seed"
   | "unexpected";
@@ -56,7 +57,7 @@ function usage(exitCode: 0 | 2): never {
       "usage: classify-dirty-state.ts [--repo <path>] [--seed <work-id>]",
       "       [--dispatch-dir <path>] [--seedstack-dir <path>]",
       "       [--expected-seed <path-prefix>]... [--preexisting <path>]...",
-      "       [--status-file <path>] [--dirty-policy strict|loop|commit]",
+      "       [--status-file <path>] [--dirty-snapshot <path>] [--dirty-policy strict|loop|commit]",
       "       [--pretty] [--allow-unexpected] [--self-test]",
       "",
     ].join("\n"),
@@ -177,6 +178,15 @@ function parseArgs(argv: string[]): Options {
     }
     if (arg.startsWith("--status-file=")) {
       options.statusFile = arg.slice("--status-file=".length);
+      continue;
+    }
+    if (arg === "--dirty-snapshot") {
+      options.statusFile = requireValue(argv, index, arg);
+      index++;
+      continue;
+    }
+    if (arg.startsWith("--dirty-snapshot=")) {
+      options.statusFile = arg.slice("--dirty-snapshot=".length);
       continue;
     }
     throw new Error(`unknown argument ${arg}`);
@@ -358,7 +368,7 @@ function classifyPath(
     return { classification: "dispatcher_owned", reason: ".seeds/issues.jsonl with --seed" };
   }
   if (path === ".seeds/knowledge.jsonl") {
-    return { classification: "dispatcher_owned", reason: ".seeds/knowledge.jsonl" };
+    return { classification: "capture_owned", reason: ".seeds/knowledge.jsonl is capture-owned" };
   }
   for (const prefix of normalized.expectedSeeds) {
     if (matchesPrefix(path, prefix)) {
@@ -376,6 +386,7 @@ function emptySummary(): Record<Classification | "total", number> {
     total: 0,
     preexisting_user: 0,
     dispatcher_owned: 0,
+    capture_owned: 0,
     expected_artifact: 0,
     expected_seed: 0,
     unexpected: 0,
@@ -447,7 +458,7 @@ function classifyStatus(statusText: string, options: Options, stripPrefix?: stri
 
 function readStatus(options: Options): { text: string; stripPrefix?: string } {
   if (options.statusFile) {
-    return { text: readFileSync(options.statusFile, "utf8") };
+    return { text: readDirtyStatusText(options.statusFile) };
   }
   const stripPrefix = execFileSync("git", ["-C", options.repo, "rev-parse", "--show-prefix"], {
     encoding: "utf8",
@@ -475,6 +486,7 @@ function assertCase(
   for (const classification of [
     "preexisting_user",
     "dispatcher_owned",
+    "capture_owned",
     "expected_artifact",
     "expected_seed",
     "unexpected",
@@ -527,7 +539,8 @@ function selfTest(pretty: boolean): void {
   );
   assertCase("expected", expected, {
     ok: true,
-    dispatcher_owned: 2,
+    dispatcher_owned: 1,
+    capture_owned: 1,
     expected_artifact: 2,
     expected_seed: 1,
   });

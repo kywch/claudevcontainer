@@ -44,10 +44,12 @@ user. Do not let likely-file guesses replace an explicit `area`.
 - branch and `git status --short`
 - pre-existing dirty paths and ownership boundaries
 - repo root, git root, command cwd, and pathspec assumptions when they differ
-- seed-declared `area` and the resulting implementation root. Prefer the
+- seed-declared `area` set and resulting `repo_edit_roots`. Prefer the
   seed's explicit `area:` from its description over language-name guesses,
-  labels, or historical paths. Treat `area` as an opaque repo-relative
-  directory or scope; do not derive it from label spelling or language name.
+  labels, or historical paths. Preserve multi-area values such as
+  `spec/conformance + impl_go/v1` as a set; do not collapse to one root. Treat
+  each `area` as an opaque repo-relative directory or scope; do not derive it
+  from label spelling or language name.
   Historical roots such as `impl/rust` must not appear in likely files, write
   scopes, or gates unless the seed explicitly names that area.
 - governing sources and source-precedence notes

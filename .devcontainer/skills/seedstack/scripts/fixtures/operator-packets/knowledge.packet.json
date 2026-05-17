@@ -1,0 +1,29 @@
+{
+  "packet_version": "operator.v1",
+  "operator": "knowledge",
+  "run_id": "run-example",
+  "task_id": null,
+  "seed": null,
+  "trial_id": null,
+  "queue_snapshot_id": null,
+  "readonly": true,
+  "status": "ok",
+  "findings": [
+    {
+      "id": "knowledge-none-qualified",
+      "severity": "info",
+      "summary": "No reusable lesson with evidence refs qualified for capture.",
+      "evidence_refs": []
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "knowledge-noop",
+      "owner": "main_agent",
+      "action": "none",
+      "summary": "No queue mutation recommended from knowledge inspection.",
+      "queue_mutation_allowed": false,
+      "target": null
+    }
+  ]
+}

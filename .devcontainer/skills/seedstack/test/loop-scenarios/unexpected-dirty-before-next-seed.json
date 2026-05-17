@@ -41,11 +41,11 @@
     "dispatch": {
       "decision": "closed",
       "dirty_paths": [
-        "seed-fixture-0007a.txt"
+        "src/seed-fixture-0007a.txt"
       ],
       "write_files": [
         {
-          "path": "seed-fixture-0007a.txt",
+          "path": "src/seed-fixture-0007a.txt",
           "content": "left dirty for next seed guard\n"
         }
       ]
@@ -66,7 +66,7 @@
     "reason": "unexpected_dirty",
     "final_fields": {
       "unexpected_paths": [
-        "seed-fixture-0007a.txt"
+        "src/seed-fixture-0007a.txt"
       ]
     }
   }

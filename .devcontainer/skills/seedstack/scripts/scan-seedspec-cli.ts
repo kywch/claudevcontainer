@@ -71,6 +71,7 @@ type Scan = {
     path: string | null;
   };
   ready_ids: string[];
+  issues: Issue[];
   adopted_ready_ids: string[];
   excluded_ready_ids: string[];
   adopted_blocked_ids: string[];
@@ -467,6 +468,7 @@ function classify(options: Options): Scan {
         path: null,
       },
       ready_ids: [],
+      issues: [],
       adopted_ready_ids: [],
       excluded_ready_ids: [],
       adopted_blocked_ids: [],
@@ -636,6 +638,10 @@ function classify(options: Options): Scan {
       path: adoptionPath,
     },
     ready_ids: readyIds,
+    issues: idsByIssueOrder(listIssues.map((issue) => issue.id), issueMap).flatMap((id) => {
+      const issue = issueMap.get(id);
+      return issue ? [issue] : [];
+    }),
     adopted_ready_ids: adoptedReadyIds,
     excluded_ready_ids: excludedReadyIds,
     adopted_blocked_ids: adoptedBlockedIds,
@@ -719,6 +725,7 @@ function selfTest(pretty: boolean): Scan {
     assertSelf("excluded ready", happy.ids.excluded_ready_ids.join(",") === "seed-x", happy.ids);
     assertSelf("adopted blocked", happy.ids.adopted_blocked_ids.join(",") === "seed-b", happy.ids);
     assertSelf("adopted closed", happy.ids.adopted_closed_ids.join(",") === "seed-c", happy.ids);
+    assertSelf("full records emitted", happy.issues.length === 4 && happy.issues[0]?.labels.includes("net"), happy.issues);
 
     writeJson(join(dir, "health.json"), fixture("health", { checks: [], summary: { error: 1, pass: 0, warning: 0 } }));
     assertSelf("health failure", !classify(runFixture(dir)).ok);

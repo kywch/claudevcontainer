@@ -20,25 +20,27 @@ export function writeDispatchRound(options: DispatchRoundOptions): string {
   const executeRecommendation = options.executeRecommendation ?? "close";
   const gateDecision = options.gateDecision ?? "close";
   const dirtyPaths = options.dirtyPaths ?? [];
+  const repoEditRoots = dirtyPaths.length > 0 ? dirtyPaths.join(",") : "src/fixture.ts";
+  const changedFiles = dirtyPaths.length > 0 ? dirtyPaths.join(",") : "src/fixture.ts";
   const seed = options.seed;
   assertSafeId(seed, "seed");
   const roundRoot = roundDir(seed, round);
 
-  write(options.repo, `${roundRoot}/execute-prompt.md`, prompt(seed, "execute", "execute-prompt.md", "execute.log", "execute.status", "executor-report.md", round));
+  write(options.repo, `${roundRoot}/execute-prompt.md`, prompt(seed, "execute", "execute-prompt.md", "execute.log", "execute.status", "executor-report.md", round, repoEditRoots));
   write(options.repo, `${roundRoot}/execute.log`, "fixture execute log\n");
   write(options.repo, `${roundRoot}/executor-report.md`, report("Execute", executeVerdict, "none", "not run", "none", executeRecommendation, `Verdict: ${executeVerdict}\n\nRecommendation: ${executeRecommendation}\n`));
 
-  write(options.repo, `${roundRoot}/implement-prompt.md`, prompt(seed, "implement", "implement-prompt.md", "implement.log", "implement.status", "implement-report.md", round));
+  write(options.repo, `${roundRoot}/implement-prompt.md`, prompt(seed, "implement", "implement-prompt.md", "implement.log", "implement.status", "implement-report.md", round, repoEditRoots));
   write(options.repo, `${roundRoot}/implement.log`, "fixture implement log\n");
-  write(options.repo, `${roundRoot}/implement-report.md`, report("Implement", "done", "src/fixture.ts", "not run", "none", "close", "Outcome: done\n\nRecommendation: close\n"));
+  write(options.repo, `${roundRoot}/implement-report.md`, report("Implement", "done", changedFiles, "not run", "none", "close", "Outcome: done\n\nRecommendation: close\n"));
 
-  write(options.repo, `${roundRoot}/review-prompt.md`, prompt(seed, "review", "review-prompt.md", "review.log", "review.status", "review-report.md", round));
+  write(options.repo, `${roundRoot}/review-prompt.md`, prompt(seed, "review", "review-prompt.md", "review.log", "review.status", "review-report.md", round, repoEditRoots));
   write(options.repo, `${roundRoot}/review.log`, "fixture review log\n");
-  write(options.repo, `${roundRoot}/review-report.md`, report("Review", "pass", "src/fixture.ts", "not run", "none", "close", "Verdict: pass\n\nRecommendation: close\n"));
+  write(options.repo, `${roundRoot}/review-report.md`, report("Review", "pass", changedFiles, "not run", "none", "close", "Verdict: pass\n\nRecommendation: close\n"));
 
-  write(options.repo, `${roundRoot}/verify-1-prompt.md`, prompt(seed, "verify", "verify-1-prompt.md", "verify-1.log", "verify-1.status", "verify-1.md", round));
+  write(options.repo, `${roundRoot}/verify-1-prompt.md`, prompt(seed, "verify", "verify-1-prompt.md", "verify-1.log", "verify-1.status", "verify-1.md", round, repoEditRoots));
   write(options.repo, `${roundRoot}/verify-1.log`, "fixture verify log\n");
-  write(options.repo, `${roundRoot}/verify-1.md`, report("Verify", "pass", "src/fixture.ts", "not run", "none", "close", "Verdict: pass\n"));
+  write(options.repo, `${roundRoot}/verify-1.md`, report("Verify", "pass", changedFiles, "not run", "none", "close", "Verdict: pass\n"));
 
   writeStatus(options.repo, seed, round, "execute", "execute-prompt.md", "execute.log", "executor-report.md");
   writeStatus(options.repo, seed, round, "implement", "implement-prompt.md", "implement.log", "implement-report.md");
@@ -157,7 +159,7 @@ function writeStatus(
   }, null, 2)}\n`);
 }
 
-function prompt(seed: string, role: string, promptName: string, logName: string, statusName: string, reportName: string, round: number): string {
+function prompt(seed: string, role: string, promptName: string, logName: string, statusName: string, reportName: string, round: number, repoEditRoots = "src/fixture.ts"): string {
   const root = roundDir(seed, round);
   const base = role === "verify" ? "verify-1" : role;
   const launchEvidencePath = `${root}/${base}-launch-evidence.json`;
@@ -169,7 +171,7 @@ function prompt(seed: string, role: string, promptName: string, logName: string,
     `<launch_provenance parent_launch_id="${parentLaunchId}" launch_evidence_path="${launchEvidencePath}" status_owner="parent_or_supervisor" />`,
     "<rules>",
     '  <no_seed_mutation path=".seeds/**" />',
-    `  <preserve_dirty_paths dirty_baseline="none" artifact_write_roots="${root}/" dispatch_artifact_roots="tmp/dispatch-work/${seed}/" repo_edit_roots="src/fixture.ts" seedstack_artifact_roots="" gate_artifacts="tmp/dispatch-work/${seed}/gate.md,tmp/dispatch-work/${seed}/dispatcher-report.md" dispatcher_owned_seed_state="cli_only" />`,
+    `  <preserve_dirty_paths dirty_baseline="none" artifact_write_roots="${root}/" dispatch_artifact_roots="tmp/dispatch-work/${seed}/" repo_edit_roots="${repoEditRoots}" seedstack_artifact_roots="" gate_artifacts="tmp/dispatch-work/${seed}/gate.md,tmp/dispatch-work/${seed}/dispatcher-report.md" dispatcher_owned_seed_state="cli_only" />`,
     '  <commands obey_repo_wrappers="true" />',
     "</rules>",
     "",
@@ -177,7 +179,7 @@ function prompt(seed: string, role: string, promptName: string, logName: string,
     "Write report summary first with status, changed_files, tests, blockers, next_action.",
     `Report path: ${root}/${reportName}`,
     "",
-    `<child_artifact_contract ref="dispatch-child-artifact.v2" report_path="${root}/${reportName}" status_owner="parent_or_supervisor" child_writes="report_only" no_seed_mutation=".seeds/**" command_wrapper="repo-native" no_parent_transcript_polling="true" preserve_dirty_paths="required" dirty_baseline="fixture-clean" artifact_write_roots="${root}/" dispatch_artifact_roots="tmp/dispatch-work/${seed}/" repo_edit_roots="src/fixture.ts" seedstack_artifact_roots="" gate_artifacts="tmp/dispatch-work/${seed}/gate.md,tmp/dispatch-work/${seed}/dispatcher-report.md" dispatcher_owned_seed_state="cli_only" />`,
+    `<child_artifact_contract ref="dispatch-child-artifact.v2" report_path="${root}/${reportName}" status_owner="parent_or_supervisor" child_writes="report_only" no_seed_mutation=".seeds/**" command_wrapper="repo-native" no_parent_transcript_polling="true" preserve_dirty_paths="required" dirty_baseline="fixture-clean" artifact_write_roots="${root}/" dispatch_artifact_roots="tmp/dispatch-work/${seed}/" repo_edit_roots="${repoEditRoots}" seedstack_artifact_roots="" gate_artifacts="tmp/dispatch-work/${seed}/gate.md,tmp/dispatch-work/${seed}/dispatcher-report.md" dispatcher_owned_seed_state="cli_only" />`,
     "",
   ].join("\n");
 }

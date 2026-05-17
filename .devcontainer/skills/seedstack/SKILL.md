@@ -18,6 +18,12 @@ Manage the work order lifecycle around `dispatch-work`.
 `dispatch-work` stays separate and owns one work item's execution,
 verification, and local done/escalate gate. Seedstack owns graph shape, queue
 selection/close, follow-up creation, and loop control.
+Knowledge capture is separate from both: `.seeds/knowledge.jsonl` is an
+append-only log owned only by the `capture-knowledge` step. See
+`references/manage-run.md`.
+Operator subagents are read-only diagnosers. They write packets under the run
+artifact tree, never queue state; queue mutation remains main-agent/Seedstack
+owned.
 
 ## Inputs
 
@@ -146,6 +152,19 @@ fall back to another queue CLI unless the user explicitly supplies one.
 If `.seeds` is missing in run/manage mode, stop and ask before `sd init`.
 Do not auto-initialize queue state.
 
+For interrupted or unclear runs, use the recovery runbook in
+`references/manage-run.md`. The optional read-only advisor is:
+
+```bash
+bun skills/seedstack/scripts/check-recovery-state.ts \
+  --seedstack-dir tmp/seedstack/<slug> \
+  --pretty
+```
+
+It emits `recovery_check.v1` with a `next_safe_command`. It must not be used as
+a queue or run-state writer; update `run-state.json` only through
+`scripts/update-run-state.ts`.
+
 The supervisor is the authority for continue/stop/done. It streams JSONL
 events to stdout and `<seedstack-dir>/events.jsonl`, persists loop epochs in
 `<seedstack-dir>/loop-state.json`, launches bounded child agents for one
@@ -182,10 +201,15 @@ the remedy to commit the queue baseline first.
 | Plan-Review | independent critique of plan artifact (full lenses) | read-only |
 | Diff-Review | scoped critique of revision delta (diff lens) | read-only |
 | Verify | confirms specific fixes landed, no regressions in touched cards | read-only |
+| Operator subagents | bounded diagnostics: preflight, artifacts, verifier, recovery, knowledge | read-only packets only |
 
 Research, Plan-Review, Diff-Review, and Verify agents are read-only. They
 read source files, spec, and plan artifacts. They do not edit the plan or
 create work orders.
+Operator subagents are also read-only. They may write only
+`operator/*.packet.json` under run artifacts, with `readonly: true` and
+`packet_version: "operator.v1"`. The main agent reads only
+`operator/operator_summary.json` for compact supervision context.
 
 Read-only subagents author all `review-*` and `verify-*` artifacts. The
 planner/orchestrator may only copy or minimally wrap their outputs. Verify
@@ -203,6 +227,8 @@ agents must be fresh and targeted. Full rules: `references/plan-review.md`.
 ## Safety
 
 - Do not hand-edit `.seeds/**`. Use work queue CLI only.
+- Exception: `capture-knowledge` may append `.seeds/knowledge.jsonl` only;
+  queue files remain Seedstack/work queue CLI owned.
 - Plan mode is non-implementation. Plan acceptance authorizes plan
   finalization only; it does not authorize editing repo code, invoking
   `dispatch-work`, running the stack loop, or starting

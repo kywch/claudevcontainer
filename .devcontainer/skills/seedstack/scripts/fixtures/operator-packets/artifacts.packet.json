@@ -1,0 +1,29 @@
+{
+  "packet_version": "operator.v1",
+  "operator": "artifacts",
+  "run_id": "run-example",
+  "task_id": null,
+  "seed": null,
+  "trial_id": null,
+  "queue_snapshot_id": null,
+  "readonly": true,
+  "status": "ok",
+  "findings": [
+    {
+      "id": "artifacts-present",
+      "severity": "info",
+      "summary": "Required artifacts, schemas, redaction checks, and trajectory references are present.",
+      "evidence_refs": []
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "artifacts-noop",
+      "owner": "main_agent",
+      "action": "none",
+      "summary": "No queue mutation recommended from artifact inspection.",
+      "queue_mutation_allowed": false,
+      "target": null
+    }
+  ]
+}

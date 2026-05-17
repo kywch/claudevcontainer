@@ -6,7 +6,8 @@
 // existing deterministic Seedstack checkers.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -45,6 +46,8 @@ type Options = {
   mode: "auto" | "manual";
   commitPolicy: "none" | "per_seed";
   commitPolicyExplicit: boolean;
+  knowledgeCapture: "off" | "audit" | "record";
+  knowledgeRequired: boolean;
   codexBin: string;
   codexReasoningEffort: "low" | "medium" | "high" | "xhigh";
   runner: "codex" | "claude";
@@ -93,6 +96,9 @@ Args:
   --seed-cli <path>                work queue CLI. Default: sd.
   --mode <auto|manual>             Default: auto.
   --commit-policy <none|per_seed>   Default: per_seed in auto, none in manual.
+  --knowledge-capture <off|audit|record>
+                                    Knowledge capture policy after clean close. Default: audit.
+  --knowledge-required              Block when knowledge capture check fails.
   --codex-bin <path>               Codex binary for child steps. Default: codex.
   --codex-reasoning-effort <level> Codex reasoning effort for child steps.
                                     Values: low, medium, high, xhigh. Default: medium.
@@ -120,6 +126,9 @@ Args:
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SEEDSTACK_DIR = dirname(SCRIPT_DIR);
 const DISPATCH_SEED_DIR = resolve(SEEDSTACK_DIR, "..", "dispatch-work");
+const KNOWLEDGE_STORE_SCRIPT = "/workspace/.devcontainer/skills/capture-knowledge/knowledge-store.ts";
+const KNOWLEDGE_RECORD_TYPES = new Set(["convention", "pattern", "failure", "decision", "reference", "guide"]);
+const KNOWLEDGE_CAPTURE_STATES = new Set(["recorded", "none_qualified", "store_missing", "skipped_user_waived"]);
 
 function usage(exitCode: 0 | 2): never {
   (exitCode === 0 ? process.stdout : process.stderr).write(HELP);
@@ -156,6 +165,8 @@ function parseArgs(argv: string[]): Options {
     mode: "auto",
     commitPolicy: "none",
     commitPolicyExplicit: false,
+    knowledgeCapture: "audit",
+    knowledgeRequired: false,
     codexBin: "codex",
     codexReasoningEffort: "medium",
     runner: "codex",
@@ -222,6 +233,18 @@ function parseArgs(argv: string[]): Options {
         index += 1;
         break;
       }
+      case "--knowledge-capture": {
+        const policy = take(argv, index, arg);
+        if (policy !== "off" && policy !== "audit" && policy !== "record") {
+          throw new Error("--knowledge-capture must be off, audit, or record");
+        }
+        options.knowledgeCapture = policy;
+        index += 1;
+        break;
+      }
+      case "--knowledge-required":
+        options.knowledgeRequired = true;
+        break;
       case "--codex-bin":
         options.codexBin = take(argv, index, arg);
         index += 1;
@@ -310,6 +333,13 @@ function parseArgs(argv: string[]): Options {
           }
           options.commitPolicy = policy;
           options.commitPolicyExplicit = true;
+        }
+        else if (arg.startsWith("--knowledge-capture=")) {
+          const policy = arg.slice("--knowledge-capture=".length);
+          if (policy !== "off" && policy !== "audit" && policy !== "record") {
+            throw new Error("--knowledge-capture must be off, audit, or record");
+          }
+          options.knowledgeCapture = policy;
         }
         else if (arg.startsWith("--codex-bin=")) options.codexBin = arg.slice("--codex-bin=".length);
         else if (arg.startsWith("--codex-reasoning-effort=")) {
@@ -911,8 +941,309 @@ function commitCandidatePaths(dirty: JsonObject): string[] {
   return [...new Set(pathEntries(dirty.paths)
     .filter((item) => allowed.has(item.classification))
     .map((item) => item.path)
-    .filter((path) => path && !path.startsWith("tmp/")))]
+    .filter((path) => path && !path.startsWith("tmp/") && path !== ".seeds/knowledge.jsonl"))]
     .sort();
+}
+
+function knowledgeCapturePath(seed: string): string {
+  return join(optionsGlobal.repo, "tmp", "dispatch-work", seed, "knowledge-capture.md");
+}
+
+function knowledgeStorePath(): string {
+  return join(optionsGlobal.repo, ".seeds", "knowledge.jsonl");
+}
+
+function knowledgeStoreLineCount(path: string): { valid: boolean; count: number; error?: string } {
+  if (!existsSync(path)) return { valid: true, count: 0 };
+  const lines = readFileSync(path, "utf8").split(/\r?\n/).filter((line) => line.trim().length > 0);
+  try {
+    for (const line of lines) JSON.parse(line) as unknown;
+    return { valid: true, count: lines.length };
+  } catch (error) {
+    return { valid: false, count: lines.length, error: (error as Error).message };
+  }
+}
+
+function knowledgeStoreGitState(): { dirty: boolean; status: string } {
+  const status = runGit(["status", "--porcelain=v1", "--untracked-files=all", "--", ".seeds/knowledge.jsonl"], true).stdout;
+  return { dirty: status.length > 0, status };
+}
+
+function knowledgeMergeUnionConfigured(): boolean {
+  const path = join(optionsGlobal.repo, ".seeds", ".gitattributes");
+  if (!existsSync(path)) return false;
+  return readFileSync(path, "utf8").split(/\r?\n/).some((line) => /^\s*knowledge\.jsonl\s+.*\bmerge=union\b/.test(line));
+}
+
+function parseKnowledgeCaptureState(text: string): string | null {
+  const match = text.match(/\bcapture_state\b\s*[:=]\s*`?([a-z_]+)/i);
+  return match?.[1] ?? null;
+}
+
+function parseAcceptedIds(text: string): string[] {
+  const ids = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    if (!/\baccepted(?:_|\s+)ids?\b/i.test(line)) continue;
+    for (const match of line.matchAll(/\bex-[a-f0-9]{6}\b/g)) ids.add(match[0]);
+  }
+  return [...ids].sort();
+}
+
+function stripJsonComments(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/(^|[^:])\/\/.*$/g, "$1"))
+    .join("\n");
+}
+
+function asKnowledgeCandidate(value: unknown): { type: string; content: string } | null {
+  if (!isObject(value)) return null;
+  const type = stringField(value.type);
+  const content = stringField(value.content);
+  if (type && content && KNOWLEDGE_RECORD_TYPES.has(type) && !("evidence" in value)) return { type, content };
+  return null;
+}
+
+function addDirectKnowledgeCandidate(value: unknown, out: Array<{ type: string; content: string }>): void {
+  if (Array.isArray(value)) {
+    for (const item of value) addDirectKnowledgeCandidate(item, out);
+    return;
+  }
+  const candidate = asKnowledgeCandidate(value);
+  if (candidate) out.push(candidate);
+}
+
+function addAcceptedRecords(value: unknown, out: Array<{ type: string; content: string }>): void {
+  if (!isObject(value)) return;
+  if (Array.isArray(value.accepted_records)) {
+    for (const item of value.accepted_records) addDirectKnowledgeCandidate(item, out);
+  }
+}
+
+function extractStructuredKnowledgeCandidates(text: string): Array<{ type: string; content: string }> {
+  const candidates: Array<{ type: string; content: string }> = [];
+  const parseAcceptedRecordsKey = (raw: string) => {
+    try {
+      addAcceptedRecords(JSON.parse(stripJsonComments(raw)) as unknown, candidates);
+    } catch {
+      // Ignore non-JSON prose. The loop must not infer records from text.
+    }
+  };
+  for (const match of text.matchAll(/```(?:json|jsonc)?\s*\n([\s\S]*?)```/gi)) parseAcceptedRecordsKey(match[1] ?? "");
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim().replace(/^[-*]\s+/, "");
+    if (trimmed.startsWith("{")) parseAcceptedRecordsKey(trimmed);
+  }
+  for (const section of acceptedRecordsSections(text)) {
+    const parseDirect = (raw: string) => {
+      try {
+        const parsed = JSON.parse(stripJsonComments(raw)) as unknown;
+        if (Array.isArray(parsed)) addDirectKnowledgeCandidate(parsed, candidates);
+        else {
+          addDirectKnowledgeCandidate(parsed, candidates);
+          addAcceptedRecords(parsed, candidates);
+        }
+      } catch {
+        // Ignore non-JSON prose. Only explicit JSON records are accepted.
+      }
+    };
+    for (const match of section.matchAll(/```(?:json|jsonc)?\s*\n([\s\S]*?)```/gi)) parseDirect(match[1] ?? "");
+    for (const line of section.split(/\r?\n/)) {
+      const trimmed = line.trim().replace(/^[-*]\s+/, "");
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) parseDirect(trimmed);
+    }
+  }
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const key = `${candidate.type}\0${candidate.content}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function acceptedRecordsSections(text: string): string[] {
+  const sections: string[] = [];
+  const lines = text.split(/\r?\n/);
+  let active: string[] | null = null;
+  const flush = () => {
+    if (active) sections.push(active.join("\n"));
+    active = null;
+  };
+  for (const line of lines) {
+    const label = markdownSectionLabel(line);
+    if (label) {
+      if (/^accepted records$/i.test(label)) {
+        flush();
+        active = [];
+        continue;
+      }
+      if (active) {
+        flush();
+        continue;
+      }
+    }
+    if (active) active.push(line);
+  }
+  flush();
+  return sections;
+}
+
+function markdownSectionLabel(line: string): string | null {
+  const trimmed = line.trim();
+  const heading = trimmed.match(/^#{1,6}\s+(.+?)\s*#*$/);
+  const raw = heading?.[1] ?? trimmed.match(/^([A-Za-z][A-Za-z0-9 _-]{1,80}):?\s*$/)?.[1];
+  return raw ? raw.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ") : null;
+}
+
+function knowledgeAuditValidation(
+  auditPresent: boolean,
+  auditText: string,
+  captureState: string | null,
+  candidates: Array<{ type: string; content: string }>,
+  acceptedIds: string[],
+): { ok: boolean; state: string; errors: string[] } {
+  if (!auditPresent) return { ok: false, state: "audit_missing", errors: ["knowledge-capture.md missing"] };
+  const errors: string[] = [];
+  if (auditText.trim().length === 0) errors.push("knowledge-capture.md empty");
+  if (!captureState) errors.push("capture_state missing");
+  else if (!KNOWLEDGE_CAPTURE_STATES.has(captureState)) errors.push(`capture_state invalid: ${captureState}`);
+  if (captureState === "recorded" && candidates.length === 0 && acceptedIds.length === 0) {
+    errors.push("recorded capture requires accepted_records or accepted IDs");
+  }
+  if (captureState === "none_qualified" && candidates.length > 0) {
+    errors.push("none_qualified capture cannot include accepted_records");
+  }
+  return errors.length === 0 ? { ok: true, state: captureState ?? "audit_present", errors } : { ok: false, state: "audit_invalid", errors };
+}
+
+function baseKnowledgeCaptureCheck(seed: string, mode: Options["knowledgeCapture"]): JsonObject {
+  const auditPath = knowledgeCapturePath(seed);
+  const auditPresent = existsSync(auditPath);
+  const auditText = auditPresent ? readFileSync(auditPath, "utf8") : "";
+  const storePath = knowledgeStorePath();
+  const store = knowledgeStoreLineCount(storePath);
+  const gitState = knowledgeStoreGitState();
+  const candidates = extractStructuredKnowledgeCandidates(auditText);
+  const captureState = auditPresent ? parseKnowledgeCaptureState(auditText) : null;
+  const acceptedIds = auditPresent ? parseAcceptedIds(auditText) : [];
+  const auditValidation = knowledgeAuditValidation(auditPresent, auditText, captureState, candidates, acceptedIds);
+  const captureOk = auditValidation.ok && captureState !== "store_missing";
+  return {
+    contract: "knowledge_capture_check.v1",
+    ok: captureOk,
+    mode,
+    seed,
+    state: auditValidation.state,
+    inputs: {
+      audit_path: `tmp/dispatch-work/${seed}/knowledge-capture.md`,
+      audit_present: auditPresent,
+      store_path: ".seeds/knowledge.jsonl",
+      store_present: existsSync(storePath),
+      approved_store_script: KNOWLEDGE_STORE_SCRIPT,
+      approved_store_present: existsSync(KNOWLEDGE_STORE_SCRIPT),
+    },
+    audit: {
+      capture_state: captureState,
+      valid: auditValidation.ok,
+      errors: auditValidation.errors,
+      marker_count: (auditText.match(/<!--\s*KNOWLEDGE:/g) ?? []).length,
+      accepted_ids: acceptedIds,
+      structured_candidates_count: candidates.length,
+      structured_candidates: candidates,
+    },
+    store: {
+      valid: store.valid,
+      count: store.count,
+      ...(store.error ? { error: store.error } : {}),
+      dirty: gitState.dirty,
+      status_porcelain: gitState.status,
+      merge_union: knowledgeMergeUnionConfigured(),
+    },
+  };
+}
+
+function recordKnowledgeCandidates(check: JsonObject): JsonObject {
+  const audit = isObject(check.audit) ? check.audit : {};
+  const candidates = Array.isArray(audit.structured_candidates)
+    ? audit.structured_candidates.filter(isObject).flatMap((item) => {
+        const type = stringField(item.type);
+        const content = stringField(item.content);
+        return type && content && KNOWLEDGE_RECORD_TYPES.has(type) ? [{ type, content }] : [];
+      })
+    : [];
+  if (check.state === "audit_missing" || check.state === "audit_invalid") return check;
+  if (check.state !== "recorded") return check;
+  if (!existsSync(KNOWLEDGE_STORE_SCRIPT) || !existsSync(join(optionsGlobal.repo, ".seeds"))) {
+    return { ...check, ok: false, state: "store_missing" };
+  }
+  if (candidates.length === 0) return check;
+
+  const before = knowledgeStoreLineCount(knowledgeStorePath()).count;
+  const outputs: JsonObject[] = [];
+  for (const candidate of candidates) {
+    const proc = spawnSync(process.execPath, [KNOWLEDGE_STORE_SCRIPT, "record", ".seeds/knowledge.jsonl", "--stdin"], {
+      cwd: optionsGlobal.repo,
+      input: JSON.stringify(candidate),
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+    });
+    let parsed: unknown = null;
+    try {
+      parsed = proc.stdout.trim() ? JSON.parse(proc.stdout.trim()) as unknown : null;
+    } catch {
+      parsed = null;
+    }
+    outputs.push({
+      status: proc.status ?? 1,
+      ok: isObject(parsed) ? parsed.ok === true : false,
+      stdout: isObject(parsed) ? parsed : null,
+      stderr: proc.stderr.trim(),
+    });
+  }
+  const failed = outputs.filter((output) => output.ok !== true);
+  const after = knowledgeStoreLineCount(knowledgeStorePath()).count;
+  return {
+    ...baseKnowledgeCaptureCheck(String(check.seed), "record"),
+    ok: failed.length === 0,
+    state: failed.length === 0 ? "recorded" : "record_failed",
+    record: {
+      candidates: candidates.length,
+      store_count_before: before,
+      store_count_after: after,
+      command_outputs: outputs,
+    },
+  };
+}
+
+function runKnowledgeCaptureStep(seedstackDir: string, iteration: number, seed: string): void {
+  const mode = optionsGlobal.knowledgeCapture;
+  if (mode === "off") {
+    emit(seedstackDir, "knowledge_capture", { seed, mode, ok: true, state: "off" });
+    return;
+  }
+  let check = baseKnowledgeCaptureCheck(seed, mode);
+  if (mode === "record") check = recordKnowledgeCandidates(check);
+  const path = writeLoopJson(seedstackDir, iteration, `knowledge-capture-${seed}`, check);
+  emit(seedstackDir, "knowledge_capture", {
+    seed,
+    mode,
+    ok: ok(check),
+    state: stringField(check.state) ?? null,
+    path,
+  });
+  if (knowledgeCaptureBlocksRequired(check)) {
+    stop(seedstackDir, iteration, "blocked", "knowledge_capture_required_failed", {
+      seed,
+      knowledge_capture: path,
+      state: stringField(check.state) ?? null,
+    });
+  }
+}
+
+function knowledgeCaptureBlocksRequired(check: JsonObject): boolean {
+  return !ok(check) && optionsGlobal.knowledgeRequired;
 }
 
 function markdownCell(value: string): string {
@@ -1140,7 +1471,9 @@ function discoverPriorDispatchChildResult(seedstackDir: string, seed: string, ru
 function reconcileDispatchToManage(seedstackDir: string, iteration: number, seed: string, childResult?: ChildResult, childResultPath?: string): void {
   const roundPath = stringField(childResult?.round_path) ?? undefined;
   const nonclosedWithoutRound = childResult && childResult.decision !== "closed" && !roundPath;
-  const exactValidation = nonclosedWithoutRound ? null : dispatchWorkValidate(seedstackDir, iteration, seed, roundPath);
+  const dirtySnapshot = nonclosedWithoutRound ? null : snapshotDirtyState(seedstackDir, iteration, `dispatch-dirty-snapshot-${seed}`);
+  if (dirtySnapshot) emit(seedstackDir, "dispatch_dirty_snapshot", { seed, path: latestArtifactPath(dirtySnapshot) });
+  const exactValidation = nonclosedWithoutRound ? null : dispatchWorkValidate(seedstackDir, iteration, seed, roundPath, dirtySnapshot ? latestArtifactPath(dirtySnapshot) : undefined);
   if (exactValidation) emit(seedstackDir, "dispatch_exact_validation", { seed, ok: ok(exactValidation), path: latestArtifactPath(exactValidation) });
   const reconcile = nonclosedWithoutRound
     ? { ...readJson(syntheticChildReconcile(seedstackDir, iteration, seed, childResult, childResultPath)), __path: artifact(seedstackDir, `reconcile-${seed}`, iteration) } as JsonObject
@@ -1157,6 +1490,7 @@ function reconcileDispatchToManage(seedstackDir: string, iteration: number, seed
       "loop",
       "--validation-file",
       latestArtifactPath(exactValidation as JsonObject),
+      ...(dirtySnapshot ? ["--dirty-snapshot", latestArtifactPath(dirtySnapshot)] : []),
       "--pretty",
     ], true);
   emit(seedstackDir, "reconcile_result", { seed, ok: ok(reconcile), decision: decision(reconcile), path: latestArtifactPath(reconcile) });
@@ -1230,7 +1564,22 @@ function recordSkippedSeed(seedstackDir: string, seed: string, reason: string, d
   emit(seedstackDir, "seed_skipped", { seed, reason, ...detail });
 }
 
-function dispatchWorkValidate(seedstackDir: string, iteration: number, seed: string, roundPath?: string): JsonObject {
+function snapshotDirtyState(seedstackDir: string, iteration: number, label: string): JsonObject {
+  return runJson(seedstackDir, iteration, label, checkerPath("snapshot-dirty-state.ts"), [
+    "--repo",
+    optionsGlobal.repo,
+    "--pretty",
+  ], true);
+}
+
+function dispatchWorkValidate(
+  seedstackDir: string,
+  iteration: number,
+  seed: string,
+  roundPath?: string,
+  dirtySnapshotPath?: string,
+  queueMutationContext?: "dispatch" | "manager",
+): JsonObject {
   const args = [
     "--repo",
     optionsGlobal.repo,
@@ -1242,6 +1591,8 @@ function dispatchWorkValidate(seedstackDir: string, iteration: number, seed: str
     "loop",
   ];
   if (roundPath) args.push("--round-path", roundPath);
+  if (dirtySnapshotPath) args.push("--dirty-snapshot", dirtySnapshotPath);
+  if (queueMutationContext) args.push("--queue-mutation-context", queueMutationContext);
   args.push("--pretty");
   return runJson(seedstackDir, iteration, `dispatch-work-validation-${seed}`, dispatchValidatorPath(), args, true);
 }
@@ -1406,6 +1757,8 @@ async function runLoop(): Promise<never> {
   emit(seedstackDir, "loop_start", {
     mode: optionsGlobal.mode,
     commit_policy: optionsGlobal.commitPolicy,
+    knowledge_capture: optionsGlobal.knowledgeCapture,
+    knowledge_required: optionsGlobal.knowledgeRequired,
     seedstack_dir: seedstackDir,
     adoption_selection: adoptionSelection,
     codex_reasoning_effort: optionsGlobal.codexReasoningEffort,
@@ -1627,7 +1980,9 @@ async function runLoop(): Promise<never> {
       if (optionsGlobal.commitPolicy === "per_seed") {
         dashboardCurrentPhase = "commit";
         dashboardPhaseStartedAt = Date.now();
-        const commitValidation = dispatchWorkValidate(seedstackDir, iteration, seed);
+        const commitDirtySnapshot = snapshotDirtyState(seedstackDir, iteration, `commit-dirty-snapshot-${seed}`);
+        emit(seedstackDir, "commit_dirty_snapshot", { seed, path: latestArtifactPath(commitDirtySnapshot) });
+        const commitValidation = dispatchWorkValidate(seedstackDir, iteration, seed, undefined, latestArtifactPath(commitDirtySnapshot), "manager");
         const commitReconcile = runJson(seedstackDir, iteration, `commit-reconcile-${seed}`, checkerPath("check-dispatch-reconcile.ts"), [
           "--repo",
           optionsGlobal.repo,
@@ -1641,6 +1996,8 @@ async function runLoop(): Promise<never> {
           "loop",
           "--validation-file",
           latestArtifactPath(commitValidation),
+          "--dirty-snapshot",
+          latestArtifactPath(commitDirtySnapshot),
           ...expectedSeedPaths.flatMap((path) => ["--expected-seed", path]),
           "--pretty",
         ], true);
@@ -1716,6 +2073,7 @@ async function runLoop(): Promise<never> {
         commitCheckPath = latestArtifactPath(ledger);
         if (dashboardCurrentTiming) dashboardCurrentTiming.commit_ms = Date.now() - dashboardPhaseStartedAt;
       }
+      runKnowledgeCaptureStep(seedstackDir, iteration, seed);
       if (dashboardCurrentTiming) { dashboardTimings.push(dashboardCurrentTiming); dashboardCurrentTiming = null; }
       dashboardCurrentSeed = null;
       dashboardCurrentPhase = "idle";
@@ -1946,6 +2304,12 @@ async function selfTest(pretty: boolean): Promise<never> {
   assertSelfTest(parsed.childSilentProbeMs === 6, "silent probe arg parse");
   assertSelfTest(parsed.postSeedDelayMs === 25, "post-seed delay equals arg parse");
   assertSelfTest(parsed.commitPolicy === "per_seed", "auto commit policy default");
+  assertSelfTest(parsed.knowledgeCapture === "audit", "knowledge capture default");
+  const recordKnowledge = parseArgs(["--knowledge-capture", "record", "--knowledge-required"]);
+  assertSelfTest(recordKnowledge.knowledgeCapture === "record", "knowledge capture arg parse");
+  assertSelfTest(recordKnowledge.knowledgeRequired, "knowledge required arg parse");
+  const offKnowledge = parseArgs(["--knowledge-capture=off"]);
+  assertSelfTest(offKnowledge.knowledgeCapture === "off", "knowledge capture equals arg parse");
   const manualDefault = parseArgs(["--mode", "manual"]);
   assertSelfTest(manualDefault.commitPolicy === "none", "manual commit policy default");
   const explicitNone = parseArgs(["--commit-policy", "none"]);
@@ -1982,6 +2346,12 @@ async function selfTest(pretty: boolean): Promise<never> {
     assertSelfTest(String((error as Error).message).includes("codex-reasoning-effort"), "invalid reasoning effort error");
   }
   try {
+    parseArgs(["--knowledge-capture", "maybe"]);
+    assertSelfTest(false, "invalid knowledge capture rejected");
+  } catch (error) {
+    assertSelfTest(String((error as Error).message).includes("knowledge-capture"), "invalid knowledge capture error");
+  }
+  try {
     runStateName({ state: "dispatch" });
     assertSelfTest(false, "invalid run-state rejected");
   } catch (error) {
@@ -2003,6 +2373,88 @@ async function selfTest(pretty: boolean): Promise<never> {
     queueDirty.length === 2 && queueDirty.includes(".seeds/issues.jsonl") && queueDirty.includes(".seeds/deps.jsonl"),
     "queue dirty preflight excludes knowledge and includes queue paths",
   );
+  const commitCandidates = commitCandidatePaths({
+    paths: [
+      { path: ".seeds/issues.jsonl", classification: "dispatcher_owned" },
+      { path: ".seeds/knowledge.jsonl", classification: "capture_owned" },
+      { path: "src/owned.ts", classification: "expected_seed" },
+    ],
+  });
+  assertSelfTest(
+    commitCandidates.join(",") === ".seeds/issues.jsonl,src/owned.ts",
+    "commit candidates exclude capture-owned knowledge",
+  );
+  const knowledgeRepo = mkdtempSync(join(tmpdir(), "seedstack-knowledge-"));
+  try {
+    const init = spawnSync("git", ["init"], { cwd: knowledgeRepo, encoding: "utf8" });
+    assertSelfTest((init.status ?? 1) === 0, "knowledge self-test git init");
+    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-empty"), { recursive: true });
+    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-empty", "knowledge-capture.md"), "capture_state=none_qualified\naccepted IDs: []\n");
+    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-invalid"), { recursive: true });
+    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-invalid", "knowledge-capture.md"), "\n");
+    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-recorded"), { recursive: true });
+    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-recorded", "knowledge-capture.md"), [
+      "capture_state=recorded",
+      "```json",
+      "{\"accepted_records\":[{\"type\":\"failure\",\"content\":\"When X, beware Y. Cause: Z. Do: W. Verify: T. Limit: L.\"}]}",
+      "```",
+      "",
+    ].join("\n"));
+    const testOptions = parseArgs([
+      "--repo",
+      knowledgeRepo,
+      "--seedstack-dir",
+      "tmp/seedstack/test",
+      "--adoption-selection",
+      "tmp/seedstack/test/adoption-selection.json",
+      "--knowledge-required",
+    ]) as Options & { seedstackDir: string; adoptionSelection: string };
+    optionsGlobal = testOptions;
+    const missingAudit = baseKnowledgeCaptureCheck("seed-missing", "audit");
+    assertSelfTest(!ok(missingAudit) && stringField(missingAudit.state) === "audit_missing", "knowledge audit missing fails check");
+    assertSelfTest(knowledgeCaptureBlocksRequired(missingAudit), "required missing audit blocks");
+    const invalidAudit = baseKnowledgeCaptureCheck("seed-invalid", "audit");
+    assertSelfTest(!ok(invalidAudit) && stringField(invalidAudit.state) === "audit_invalid", "knowledge invalid audit rejected");
+    assertSelfTest(knowledgeCaptureBlocksRequired(invalidAudit), "required invalid audit blocks");
+    const emptyAudit = baseKnowledgeCaptureCheck("seed-empty", "audit");
+    assertSelfTest(ok(emptyAudit) && stringField(emptyAudit.state) === "none_qualified", "knowledge none qualified audit succeeds");
+    assertSelfTest(!knowledgeCaptureBlocksRequired(emptyAudit), "required none qualified audit passes");
+    const missingStore = recordKnowledgeCandidates(baseKnowledgeCaptureCheck("seed-recorded", "record"));
+    assertSelfTest(!ok(missingStore) && stringField(missingStore.state) === "store_missing", "record mode missing store state");
+    mkdirSync(join(knowledgeRepo, ".seeds"), { recursive: true });
+    writeFileSync(join(knowledgeRepo, ".seeds", ".gitattributes"), "knowledge.jsonl merge=union\n");
+    writeFileSync(join(knowledgeRepo, ".seeds", "knowledge.jsonl"), "{\"id\":\"ex-5e569a\",\"type\":\"guide\",\"content\":\"x\",\"recorded_at\":\"2026-01-01T00:00:00.000Z\"}\n");
+    const noneQualified = recordKnowledgeCandidates(baseKnowledgeCaptureCheck("seed-empty", "record"));
+    assertSelfTest(ok(noneQualified) && stringField(noneQualified.state) === "none_qualified", "record mode none qualified state");
+    assertSelfTest(!knowledgeCaptureBlocksRequired(noneQualified), "required none qualified record passes");
+    const auditOne = baseKnowledgeCaptureCheck("seed-empty", "audit");
+    const auditTwo = baseKnowledgeCaptureCheck("seed-empty", "audit");
+    assertSelfTest(JSON.stringify(auditOne) === JSON.stringify(auditTwo), "knowledge audit deterministic");
+    const storeInfo = isObject(auditOne.store) ? auditOne.store : {};
+    assertSelfTest(storeInfo.count === 1 && storeInfo.dirty === true && storeInfo.merge_union === true, "knowledge store state inspected");
+    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-candidate"), { recursive: true });
+    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-candidate", "knowledge-capture.md"), [
+      "capture_state=recorded",
+      "```json",
+      JSON.stringify({
+        accepted_records: [{ type: "failure", content: "When accepted, record this. Cause: Z. Do: W. Verify: T. Limit: L." }],
+        rejected_records: [{ type: "failure", content: "Rejected record must not be appended." }],
+      }),
+      "```",
+      "",
+    ].join("\n"));
+    const candidateAudit = baseKnowledgeCaptureCheck("seed-candidate", "audit");
+    const candidateAuditInfo = isObject(candidateAudit.audit) ? candidateAudit.audit : {};
+    assertSelfTest(candidateAuditInfo.structured_candidates_count === 1, "knowledge structured candidate parse");
+    const recorded = recordKnowledgeCandidates(baseKnowledgeCaptureCheck("seed-candidate", "record"));
+    assertSelfTest(ok(recorded) && stringField(recorded.state) === "recorded", "accepted_records append via store succeeds");
+    const finalStore = readFileSync(join(knowledgeRepo, ".seeds", "knowledge.jsonl"), "utf8");
+    assertSelfTest(finalStore.includes("When accepted, record this."), "accepted record appended");
+    assertSelfTest(!finalStore.includes("Rejected record must not be appended."), "rejected record not appended");
+    assertSelfTest(knowledgeStoreLineCount(knowledgeStorePath()).count === 2, "only accepted record appended");
+  } finally {
+    rmSync(knowledgeRepo, { recursive: true, force: true });
+  }
   await runChildTimeoutSelfTest(assertSelfTest);
   const dispatchPrompt = buildDispatchPrompt("/repo", "seed-test", "/result.json");
   assertSelfTest(dispatchPrompt.includes("outer supervised exec (Codex or Claude Code CLI) managed by seedstack"), "dispatch prompt explains outer supervision");
@@ -2057,6 +2509,10 @@ async function selfTest(pretty: boolean): Promise<never> {
       "child_total_timeout",
       "invalid_run_state",
       "preexisting_queue_dirty_before_auto_run",
+      "knowledge_capture_args",
+      "knowledge_capture_required",
+      "knowledge_capture_audit",
+      "knowledge_capture_record_none",
       "child_result_contract",
       "child_launch_provenance",
       "dispatch_prompt_launch_provenance",

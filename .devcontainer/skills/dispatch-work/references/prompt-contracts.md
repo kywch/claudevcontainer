@@ -25,7 +25,8 @@ dispatch paths.
 <rules>
   <no_seed_mutation path=".seeds/**" />
   <preserve_dirty_paths dirty_baseline="" artifact_write_roots=""
-    repo_edit_roots=""
+    dispatch_artifact_roots="" seedstack_artifact_roots=""
+    gate_artifacts="" repo_edit_roots=""
     dispatcher_owned_seed_state="cli_only" />
   <commands obey_repo_wrappers="true"
     no_unavailable_aliases_or_parent_only_tools="true" />
@@ -36,7 +37,8 @@ dispatch paths.
   status_owner="parent_or_supervisor" child_writes="report_only"
   no_seed_mutation=".seeds/**" command_wrapper="repo-native"
   no_parent_transcript_polling="true" preserve_dirty_paths="required"
-  dirty_baseline="" artifact_write_roots="" repo_edit_roots=""
+  dirty_baseline="" artifact_write_roots="" dispatch_artifact_roots=""
+  seedstack_artifact_roots="" gate_artifacts="" repo_edit_roots=""
   dispatcher_owned_seed_state="cli_only" />
 <budget execute_rounds="3" implement_attempts="3" infra_respawns="1" />
 <report path="" schema="summary-first.v1" />
@@ -57,16 +59,20 @@ byte-for-byte. All path values are computed by the orchestrator from
 `scripts/dispatch-work-paths.ts` and passed as concrete values. Agents write to
 the exact `report_path` they receive. Do not construct file names.
 
-`artifact_write_roots` and `repo_edit_roots` are distinct. Research, Execute,
-Review, and Verify children use `child_writes="report_only"`: they may write
-only their assigned dispatch report under `artifact_write_roots`. Implement
-reports are still dispatch artifacts, but Implement may also edit files only
-under `repo_edit_roots` and only for assigned task scope.
+`repo_edit_roots`, `artifact_write_roots`, `dispatch_artifact_roots`,
+`seedstack_artifact_roots`, and `gate_artifacts` are distinct typed roots.
+Research, Execute, Review, and Verify children use `child_writes="report_only"`:
+they may write only their assigned dispatch report under artifact roots.
+Implement reports are still dispatch artifacts, but Implement may also edit
+files only under `repo_edit_roots` and only for assigned task scope.
 Root lists may be whitespace- or semicolon-separated and are normalized before
 validation. `tmp/dispatch-work/**`, `tmp/seedstack/**`, and `.seeds/**` are
 artifact/queue roots, never implementation roots. Legacy prompts may still use
 `allowed_write_roots`; validators treat it as implementation scope only when
 `repo_edit_roots` is absent.
+Source refs, commands, research notes, gate commands, and prose examples do not
+define edit scope. Validation checks actual dirty repo paths from the dirty
+snapshot/status against `repo_edit_roots`.
 
 All role markers and enum values are lowercase only. Desired output must not
 ask children or Dispatcher to emit `close`, `closed`, `completed`, `complete`,
@@ -146,6 +152,8 @@ Compact form requirements:
 - `preserve_dirty_paths="required"`
 - `dirty_baseline` records the baseline source or id used for dirty guarding
 - `artifact_write_roots` records dispatch artifact writable roots
+- `dispatch_artifact_roots`, `seedstack_artifact_roots`, and `gate_artifacts`
+  may further split artifact roots when caller tracks them separately
 - `repo_edit_roots` records repo roots Implement may edit; empty for read-only
   roles
 - legacy `allowed_write_roots` is accepted only for old artifacts that lack

@@ -6,11 +6,11 @@
     "dispatch": {
       "decision": "closed",
       "dirty_paths": [
-        "seed-fixture-0006.txt"
+        "src/seed-fixture-0006.txt"
       ],
       "write_files": [
         {
-          "path": "seed-fixture-0006.txt",
+          "path": "src/seed-fixture-0006.txt",
           "content": "fixture per-seed commit\n"
         }
       ]

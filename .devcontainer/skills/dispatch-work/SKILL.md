@@ -41,7 +41,7 @@ provided by `seedstack`.
    In prompt mode, ask the user for missing critical fields before Research
    when omission would risk wrong scope, acceptance, or verification.
 4. Spawn a knowledge scout if `.seeds/knowledge.jsonl` exists; write
-   `knowledge-scout.md`.
+   `knowledge-scout.md`. Treat the store as read-only during dispatch.
 5. Spawn Research agents as needed. They write `research-<i>.md`.
 6. Write `source-hints.json` and `packet.md` from work order, research,
    acceptance criteria, gates, likely files, risks, and refined scope budget.
@@ -53,8 +53,8 @@ provided by `seedstack`.
    `bun skills/dispatch-work/scripts/validate-dispatch-work.ts --work-order <work-id>`.
 11. Gate as Dispatcher. Decision is exactly one of:
    `done`, `retry`, or `escalate`.
-12. Capture knowledge via `capture-knowledge` if anything non-obvious passes
-   its recording gate.
+12. Record knowledge capture state. Only the `capture-knowledge` step may
+   append `.seeds/knowledge.jsonl`; dispatch children never mutate `.seeds/**`.
 
 Load references only when needed:
 
@@ -112,6 +112,7 @@ No role mutates queue state; queue context is read-only.
 
 - Do not hand-edit `.seeds/**`, except `capture-knowledge` may append
   `.seeds/knowledge.jsonl` through its tool when its recording gate passes.
+  Use capture states `recorded|none_qualified|store_missing|skipped_user_waived`.
 - Do not call queue mutation commands such as `sd claim`, `sd close`,
   dependency edits, label edits, or follow-up creation.
 - Preserve unrelated dirty worktree changes.

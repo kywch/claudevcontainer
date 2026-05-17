@@ -1,0 +1,29 @@
+{
+  "packet_version": "operator.v1",
+  "operator": "recovery",
+  "run_id": "run-example",
+  "task_id": null,
+  "seed": null,
+  "trial_id": null,
+  "queue_snapshot_id": null,
+  "readonly": true,
+  "status": "ok",
+  "findings": [
+    {
+      "id": "recovery-no-action",
+      "severity": "info",
+      "summary": "No recovery action is required.",
+      "evidence_refs": []
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "recovery-noop",
+      "owner": "main_agent",
+      "action": "none",
+      "summary": "Continue normal Seedstack-owned flow.",
+      "queue_mutation_allowed": false,
+      "target": null
+    }
+  ]
+}

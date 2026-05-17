@@ -1,0 +1,29 @@
+{
+  "packet_version": "operator.v1",
+  "operator": "preflight",
+  "run_id": "run-example",
+  "task_id": null,
+  "seed": null,
+  "trial_id": null,
+  "queue_snapshot_id": null,
+  "readonly": true,
+  "status": "ok",
+  "findings": [
+    {
+      "id": "preflight-ready",
+      "severity": "info",
+      "summary": "Environment, manifest, credentials, and config checks have no blocking finding.",
+      "evidence_refs": []
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "preflight-noop",
+      "owner": "main_agent",
+      "action": "none",
+      "summary": "No queue mutation recommended from preflight.",
+      "queue_mutation_allowed": false,
+      "target": null
+    }
+  ]
+}
