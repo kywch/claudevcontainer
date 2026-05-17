@@ -405,6 +405,7 @@ function updateState(existing: JsonObject, options: Options, now: string): { sta
   if (options.blockedReason) state.blocked_reason = options.blockedReason;
   if (options.doneReason) state.done_reason = options.doneReason;
   if (options.stopReason) state.stop_reason = options.stopReason;
+  normalizeStopFields(state, options);
   if (options.state === "dispatching" && options.seed) {
     const attempts = isObject(state.dispatch_attempts) ? { ...state.dispatch_attempts } : {};
     const previous = typeof attempts[options.seed] === "number" && Number.isFinite(attempts[options.seed]) ? (attempts[options.seed] as number) : 0;
@@ -487,6 +488,44 @@ function updateState(existing: JsonObject, options: Options, now: string): { sta
   }
 
   return { state, warnings };
+}
+
+function normalizeStopFields(state: JsonObject, options: Options): void {
+  const clearStopFields = () => {
+    delete state.blocked_reason;
+    delete state.done_reason;
+    delete state.stop_reason;
+    delete state.stop_condition;
+    delete state.next_command;
+    delete state.user_decision;
+  };
+
+  if (options.state === "idle" || options.state === "dispatching" || options.state === "managing") {
+    clearStopFields();
+    return;
+  }
+
+  if (options.state === "done") {
+    if (!options.doneReason && options.stopReason) state.done_reason = options.stopReason;
+    delete state.blocked_reason;
+    delete state.stop_reason;
+    delete state.stop_condition;
+    delete state.next_command;
+    delete state.user_decision;
+    return;
+  }
+
+  if (options.state === "exhausted") {
+    if (options.stopReason || options.doneReason) state.stop_reason = options.stopReason ?? options.doneReason;
+    delete state.blocked_reason;
+    delete state.done_reason;
+    delete state.stop_condition;
+    delete state.next_command;
+    delete state.user_decision;
+    return;
+  }
+
+  delete state.done_reason;
 }
 
 function renderRunMarkdown(state: JsonObject): string {
@@ -818,9 +857,70 @@ function selfTest(pretty: boolean): void {
       selfTest: true,
     });
     assert(boundary.ok, "boundary health run failed");
-    const boundaryState = readState(runStatePath(seedstackDir)).boundary_health as JsonObject;
+    const boundaryWritten = readState(runStatePath(seedstackDir));
+    const boundaryState = boundaryWritten.boundary_health as JsonObject;
     assert(boundaryState.decision === "warn", "boundary health not summarized");
     assert(Array.isArray(boundaryState.findings), "boundary findings not summarized");
+    assert(boundaryWritten.blocked_reason === undefined, "idle did not clear stale blocked_reason");
+    assert(boundaryWritten.stop_reason === undefined, "idle did not clear stale stop_reason");
+
+    const terminalDir = join(dir, "terminal");
+    mkdirSync(terminalDir, { recursive: true });
+    writeFileSync(
+      join(terminalDir, "run-state.json"),
+      JSON.stringify({
+        state: "blocked",
+        blocked_reason: "old block",
+        stop_reason: "old stop",
+        done_reason: "old done",
+        stop_condition: "old condition",
+        next_command: "old command",
+        user_decision: "old decision",
+      }),
+    );
+    const terminalDone = run({
+      repo,
+      seedstackDir: terminalDir,
+      state: "done",
+      doneReason: "all closed",
+      candidates: [],
+      events: [],
+      pretty,
+      dryRun: false,
+      selfTest: true,
+    });
+    assert(terminalDone.ok, "terminal done cleanup run failed");
+    const doneState = readState(join(terminalDir, "run-state.json"));
+    assert(doneState.done_reason === "all closed", "done reason not recorded");
+    assert(doneState.blocked_reason === undefined, "done did not clear stale blocked_reason");
+    assert(doneState.stop_reason === undefined, "done did not clear stale stop_reason");
+    assert(doneState.stop_condition === undefined, "done did not clear stale stop_condition");
+
+    writeFileSync(
+      join(terminalDir, "run-state.json"),
+      JSON.stringify({
+        state: "blocked",
+        blocked_reason: "old block",
+        stop_reason: "old stop",
+        done_reason: "old done",
+      }),
+    );
+    const terminalExhausted = run({
+      repo,
+      seedstackDir: terminalDir,
+      state: "exhausted",
+      stopReason: "skipped remaining seeds",
+      candidates: [],
+      events: [],
+      pretty,
+      dryRun: false,
+      selfTest: true,
+    });
+    assert(terminalExhausted.ok, "terminal exhausted cleanup run failed");
+    const exhaustedState = readState(join(terminalDir, "run-state.json"));
+    assert(exhaustedState.stop_reason === "skipped remaining seeds", "exhausted stop reason not recorded");
+    assert(exhaustedState.blocked_reason === undefined, "exhausted did not clear stale blocked_reason");
+    assert(exhaustedState.done_reason === undefined, "exhausted did not clear stale done_reason");
 
     const preserveCandidates = run({
       repo,
