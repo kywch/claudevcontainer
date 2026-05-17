@@ -170,6 +170,20 @@ explicit user request. Failure excerpts are bounded to the generated
 `failure-capsule.md` or at most the first error block plus final 40-80 log
 lines within the configured cap.
 
+## Final Result Write
+
+When Dispatch Work runs under Seedstack supervision, the Seedstack child result
+must be written only after all required dispatch artifacts, child statuses,
+launch evidence, `gate.md`, and `dispatcher-report.md` are present. Write the
+result with a temp file in the same directory followed by an atomic rename.
+
+If finalization fails after substantive artifacts were produced, do not rely on
+chat transcript text as completion evidence. Record a bounded failure capsule
+and write a Seedstack child result with `decision: "crashed"` or
+`decision: "escalated"` when possible. Seedstack may synthesize a recovered
+closed result only when strict dispatch artifacts validate and dirty evidence is
+clean; missing result plus dirty or incomplete artifacts blocks recovery.
+
 ## Retry And Timeout
 
 | item | default |

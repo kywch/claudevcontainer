@@ -21,6 +21,7 @@ import {
   type ChildExit,
   type ChildResult,
   type ChildRole,
+  type ChildAttemptRecord,
 } from "./child-supervisor.ts";
 import { buildDispatchPrompt, buildManagePrompt } from "./prompts.ts";
 import {
@@ -28,6 +29,9 @@ import {
   loopStatePath,
   eventsPath,
   loopDir,
+  childAttemptsDir,
+  childAttemptPath,
+  childFailureCapsulePath,
   recoveryAttemptDir,
   recoveryScanPath,
   recoveryValidationPath,
@@ -38,6 +42,7 @@ import {
   iterationResultPath,
 } from "./seedstack-paths.ts";
 import { preflightRepo, type WorktreeMetadata, type WorktreePolicy } from "./worktree-preflight.ts";
+import { writeDispatchRound } from "./fixtures/dispatch-artifacts.ts";
 
 type JsonObject = Record<string, unknown>;
 type RunStateName = "idle" | "dispatching" | "managing" | "done" | "exhausted" | "blocked" | "escalated" | "loop_cap";
@@ -1909,6 +1914,153 @@ function discoverPriorDispatchChildResult(seedstackDir: string, seed: string, ru
   return null;
 }
 
+function readAttemptRecord(path: string): ChildAttemptRecord | null {
+  try {
+    const raw = readJson(path);
+    if (!isObject(raw) || raw.contract !== "seedstack_child_attempt.v1") return null;
+    return raw as ChildAttemptRecord;
+  } catch {
+    return null;
+  }
+}
+
+function discoverLatestChildAttempt(seedstackDir: string, role: ChildRole, seed: string): { path: string; record: ChildAttemptRecord } | null {
+  const dir = childAttemptsDir(seedstackDir);
+  if (!existsSync(dir)) return null;
+  const suffix = `-${role}-${seed}.json`;
+  const attempts = readdirSync(dir)
+    .filter((file) => file.endsWith(suffix) && /^\d{4}-/.test(file))
+    .sort()
+    .reverse();
+  for (const file of attempts) {
+    const path = join(dir, file);
+    const record = readAttemptRecord(path);
+    if (record) return { path, record };
+  }
+  return null;
+}
+
+function dirtySnapshotImplPaths(snapshot: JsonObject): string[] {
+  const direct = stringArray(snapshot.actual_impl_paths);
+  if (direct.length) return direct;
+  const paths = Array.isArray(snapshot.paths) ? snapshot.paths.filter(isObject) : [];
+  return paths
+    .map((entry) => stringField(entry.path))
+    .filter((path): path is string => !!path && !path.startsWith("tmp/") && !path.startsWith(".seeds/"));
+}
+
+function validationHasCloseGate(validation: JsonObject): boolean {
+  if (!ok(validation)) return false;
+  const summary = isObject(validation.summary) ? validation.summary : {};
+  const gate = isObject(summary.gate) ? summary.gate : {};
+  return stringField(gate.decision)?.toLowerCase() === "close";
+}
+
+function writeFailureCapsule(
+  seedstackDir: string,
+  iteration: number,
+  role: ChildRole,
+  seed: string,
+  reason: string,
+  detail: JsonObject,
+): string {
+  const path = childFailureCapsulePath(seedstackDir, iteration, role, seed);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, [
+    `# ${role} child failure capsule`,
+    "",
+    `reason: ${reason}`,
+    `seed: ${seed}`,
+    `iteration: ${iteration}`,
+    "",
+    "```json",
+    JSON.stringify(detail, null, 2),
+    "```",
+    "",
+  ].join("\n"));
+  return path;
+}
+
+function writeRecoveredChildResult(path: string, seed: string, roundPath: string, summary: JsonObject): ChildResult {
+  const result: ChildResult = {
+    contract: "seedstack_child_result.v1",
+    ok: true,
+    role: "dispatch",
+    seed,
+    decision: "closed",
+    round_path: roundPath,
+    followups_requested: 0,
+    followups_created: [],
+    summary: { recovered_missing_result: true, ...summary },
+  };
+  const tmp = `${path}.tmp-${process.pid}`;
+  writeJson(tmp, result);
+  renameSync(tmp, path);
+  return result;
+}
+
+function recoverMissingDispatchChildResult(
+  seedstackDir: string,
+  iteration: number,
+  seed: string,
+): { path: string; result: ChildResult } | null {
+  const attempt = discoverLatestChildAttempt(seedstackDir, "dispatch", seed);
+  if (!attempt) return null;
+  const resultPath = attempt.record.result_path;
+  try {
+    return { path: resultPath, result: readChildResult(resultPath, "dispatch", seed) };
+  } catch {
+    // Missing or invalid result; reconcile via strict artifacts only when clean.
+  }
+  const dirtySnapshot = snapshotDirtyState(seedstackDir, iteration, `dispatch-missing-result-dirty-snapshot-${seed}`);
+  emit(seedstackDir, "dispatch_missing_result_dirty_snapshot", { seed, path: latestArtifactPath(dirtySnapshot), attempt_path: attempt.path });
+  const roundPath = join("tmp", "dispatch-work", seed, "round-1");
+  const validation = dispatchWorkValidate(seedstackDir, iteration, seed, roundPath, latestArtifactPath(dirtySnapshot));
+  emit(seedstackDir, "dispatch_missing_result_validation", { seed, ok: ok(validation), path: latestArtifactPath(validation), attempt_path: attempt.path });
+  const implPaths = dirtySnapshotImplPaths(dirtySnapshot);
+  if (validationHasCloseGate(validation) && implPaths.length === 0) {
+    const recovered = writeRecoveredChildResult(resultPath, seed, roundPath, {
+      attempt_path: attempt.path,
+      validation_path: latestArtifactPath(validation),
+      dirty_snapshot_path: latestArtifactPath(dirtySnapshot),
+    });
+    emit(seedstackDir, "dispatch_missing_result_recovered", { seed, result_path: resultPath, attempt_path: attempt.path });
+    return { path: resultPath, result: recovered };
+  }
+  const capsule = writeFailureCapsule(seedstackDir, iteration, "dispatch", seed, "dispatch_child_missing_result", {
+    attempt_path: attempt.path,
+    result_path: resultPath,
+    validation: latestArtifactPath(validation),
+    dirty_snapshot: latestArtifactPath(dirtySnapshot),
+    dirty_impl_paths: implPaths,
+  });
+  writeJson(resultPath, {
+    contract: "seedstack_child_result.v1",
+    ok: true,
+    role: "dispatch",
+    seed,
+    decision: "crashed",
+    followups_requested: 0,
+    followups_created: [],
+    blocked_reason: "dispatch_child_missing_result",
+    summary: {
+      attempt_path: attempt.path,
+      failure_capsule: capsule,
+      validation: latestArtifactPath(validation),
+      dirty_snapshot: latestArtifactPath(dirtySnapshot),
+      dirty_impl_paths: implPaths,
+    },
+  });
+  stop(seedstackDir, iteration, "blocked", implPaths.length > 0 ? "dispatch_missing_result_dirty_repo" : "dispatch_missing_result_incomplete_artifacts", {
+    seed,
+    attempt: attempt.path,
+    result_path: resultPath,
+    validation: latestArtifactPath(validation),
+    dirty_snapshot: latestArtifactPath(dirtySnapshot),
+    failure_capsule: capsule,
+  });
+}
+
 function reconcileDispatchToManage(seedstackDir: string, iteration: number, seed: string, childResult?: ChildResult, childResultPath?: string): void {
   const roundPath = stringField(childResult?.round_path) ?? undefined;
   const nonclosedWithoutRound = childResult && childResult.decision !== "closed" && !roundPath;
@@ -2273,7 +2425,8 @@ async function runLoop(): Promise<never> {
           result_path: priorChild.path,
         });
       }
-      reconcileDispatchToManage(seedstackDir, iteration, seed, priorChild?.result, priorChild?.path);
+      const recoveredChild = priorChild ?? recoverMissingDispatchChildResult(seedstackDir, iteration, seed);
+      reconcileDispatchToManage(seedstackDir, iteration, seed, recoveredChild?.result, recoveredChild?.path);
       continue;
     }
 
@@ -3094,6 +3247,67 @@ function runLoopDirtyGuardPolicyFixtureSelfTest(): void {
   }
 }
 
+function runMissingResultRecoverySelfTest(): void {
+  const root = mkdtempSync(join(tmpdir(), "seedstack-missing-result-recovery-"));
+  const previousOptions = optionsGlobal;
+  try {
+    const repo = join(root, "repo");
+    const seedstackDir = join(root, "stack");
+    const adoptionSelection = join(root, "adoption-selection.json");
+    const seed = "seed-recovery";
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(seedstackDir, { recursive: true });
+    runGitSelfTest(repo, ["init", "-b", "main"]);
+    runGitSelfTest(repo, ["config", "user.email", "seedstack@example.test"]);
+    runGitSelfTest(repo, ["config", "user.name", "Seedstack Test"]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    runGitSelfTest(repo, ["add", "README.md"]);
+    runGitSelfTest(repo, ["commit", "-m", "fixture baseline"]);
+    writeJson(adoptionSelection, { adopted_seed_ids: [seed] });
+    optionsGlobal = {
+      ...parseArgs(["--repo", repo, "--seedstack-dir", seedstackDir, "--adoption-selection", adoptionSelection]),
+      seedstackDir,
+      adoptionSelection,
+    };
+    writeDispatchRound({ repo, seed });
+    mkdirSync(loopDir(seedstackDir), { recursive: true });
+    const result = join(seedstackDir, "loop", "0001-dispatch-seed-recovery.result.json");
+    mkdirSync(childAttemptsDir(seedstackDir), { recursive: true });
+    writeJson(childAttemptPath(seedstackDir, 1, "dispatch", seed), {
+      contract: "seedstack_child_attempt.v1",
+      attempt_id: "0001-dispatch-seed-recovery",
+      role: "dispatch",
+      seed,
+      iteration: 1,
+      result_path: result,
+      prompt_path: join(seedstackDir, "loop", "0001-dispatch-seed-recovery.prompt.md"),
+      log_path: join(seedstackDir, "loop", "0001-dispatch-seed-recovery.log"),
+      pid: 12345,
+      pgid: 12345,
+      liveness_handle: "pgid:12345",
+      process_identity: { pid: 12345, starttime: "1", cwd: repo },
+      baseline_dirty_snapshot: { paths: [] },
+      heartbeat: { at: "2026-01-01T00:00:00Z", stale_after_ms: 1000 },
+      state: "failed",
+      fencing_token: "fixture",
+      started_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:01Z",
+      ended_at: "2026-01-01T00:00:01Z",
+      exit_code: 0,
+      signal: null,
+      timeout: null,
+    });
+    const recovered = recoverMissingDispatchChildResult(seedstackDir, 2, seed);
+    assertSelfTest(recovered?.result.decision === "closed", "missing result with clean strict artifacts recovers closed child result");
+    assertSelfTest(existsSync(result), "recovered child result written");
+    const parsed = readChildResult(result, "dispatch", seed);
+    assertSelfTest(parsed.summary && (parsed.summary as JsonObject).recovered_missing_result === true, "recovered result records recovery summary");
+  } finally {
+    optionsGlobal = previousOptions;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function runManageQueueOpsSelfTest(): void {
   const root = mkdtempSync(join(tmpdir(), "seedstack-queue-ops-"));
   const previousOptions = optionsGlobal;
@@ -3658,6 +3872,7 @@ async function selfTest(pretty: boolean): Promise<never> {
   runLoopIterationAllocationSelfTest();
   runArtifactRecoveryFixtureSelfTest();
   runLoopDirtyGuardPolicyFixtureSelfTest();
+  runMissingResultRecoverySelfTest();
   runManageQueueOpsSelfTest();
   runLinkedWorktreeSupervisorFixtureSelfTest();
   const queueDirty = queueDirtyPathsFromStatus([
@@ -3836,6 +4051,7 @@ async function selfTest(pretty: boolean): Promise<never> {
       "loop_iteration_allocation",
       "artifact_recovery_fixtures",
       "loop_dirty_guard_policy_fixture",
+      "missing_result_recovery_fixture",
       "manage_queue_ops_fixture",
       "linked_worktree_supervisor_fixture",
     ],

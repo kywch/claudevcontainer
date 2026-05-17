@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 // Read-only Seedstack recovery advisor. Emits the next safe deterministic command.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { childAttemptsDir } from "./seedstack-paths.ts";
 
 type RunStateName = "idle" | "dispatching" | "managing" | "done" | "exhausted" | "blocked" | "escalated" | "loop_cap";
 type Decision =
@@ -17,6 +18,7 @@ type Decision =
   | "run_state_update_required"
   | "dispatch_allowed"
   | "no_op"
+  | "blocked_unknown_child"
   | "blocked_missing_evidence";
 type Finding = { code: string; message: string; detail?: unknown };
 type JsonObject = Record<string, unknown>;
@@ -257,6 +259,28 @@ function unexpectedDirtyPaths(dirty: unknown): string[] {
   });
 }
 
+function latestAttempt(seedstackDir: string | undefined, role: string, seed: string | null): JsonObject | null {
+  if (!seedstackDir || !seed) return null;
+  const dir = childAttemptsDir(seedstackDir);
+  if (!existsSync(dir)) return null;
+  const suffix = `-${role}-${seed}.json`;
+  const files = readdirSync(dir).filter((file) => file.endsWith(suffix) && /^\d{4}-/.test(file)).sort().reverse();
+  for (const file of files) {
+    try {
+      const raw = JSON.parse(readFileSync(join(dir, file), "utf8")) as unknown;
+      if (isObject(raw) && raw.contract === "seedstack_child_attempt.v1") return { ...raw, __path: join(dir, file) };
+    } catch {
+      // Ignore malformed attempt ledgers; recovery remains conservative.
+    }
+  }
+  return null;
+}
+
+function attemptTerminal(attempt: JsonObject | null): boolean {
+  const state = stringField(attempt?.state);
+  return state === "completed" || state === "timeout" || state === "failed" || state === "unknown_terminal_state";
+}
+
 function commitPolicy(runState: unknown): string | null {
   return isObject(runState) ? stringField(runState.commit_policy) : null;
 }
@@ -354,6 +378,11 @@ function check(options: Options): Result {
   } else if (ok(dirty) === false || unexpectedDirtyPaths(dirty).length > 0) {
     recoveryDecision = "blocked_dirty";
     add(blockers, "unexpected_dirty", "unexpected dirty paths block recovery", { unexpected_paths: unexpectedDirtyPaths(dirty) });
+  } else if (state === "dispatching" && latestAttempt(options.seedstackDir, "dispatch", seed) && !attemptTerminal(latestAttempt(options.seedstackDir, "dispatch", seed))) {
+    recoveryDecision = "blocked_unknown_child";
+    add(blockers, "unknown_child_state", "in-flight dispatch has nonterminal attempt ledger; do not redispatch over unknown child state", {
+      attempt: latestAttempt(options.seedstackDir, "dispatch", seed)?.__path,
+    });
   } else if (TERMINAL.has(state)) {
     recoveryDecision = "no_op";
   } else if (state === "dispatching" && !reconcile) {
@@ -412,7 +441,11 @@ function check(options: Options): Result {
   return {
     contract: "recovery_check.v1",
     ok: blockers.length === 0,
-    decision: blockers.length === 0 ? recoveryDecision : recoveryDecision === "blocked_dirty" ? "blocked_dirty" : "blocked_missing_evidence",
+    decision: blockers.length === 0
+      ? recoveryDecision
+      : recoveryDecision === "blocked_dirty" || recoveryDecision === "blocked_unknown_child"
+        ? recoveryDecision
+        : "blocked_missing_evidence",
     blockers,
     warnings,
     state,
@@ -488,6 +521,9 @@ function selfTest(): void {
       ok: true,
       decision: "transition_ready",
     });
+    const attemptDir = childAttemptsDir(dir);
+    mkdirSync(attemptDir, { recursive: true });
+    writeFileSync(join(attemptDir, "0001-dispatch-S-1.json"), "", { flag: "a" });
 
     assertCase(
       "idle clean dispatch allowed",
@@ -501,6 +537,26 @@ function selfTest(): void {
       "reconcile_required",
       true,
     );
+    writeFileSync(join(attemptDir, "0002-dispatch-S-1.json"), JSON.stringify({
+      contract: "seedstack_child_attempt.v1",
+      role: "dispatch",
+      seed: "S-1",
+      iteration: 2,
+      state: "running",
+    }) + "\n");
+    assertCase(
+      "dispatching running attempt blocks redispatch",
+      check({ repo: dir, seedstackDir: dir, runState: dispatching, scanFile: scanReady, adoptionCheck: adoption, dirtyResult: clean, seedCli: "sd", pretty: false, selfTest: false }),
+      "blocked_unknown_child",
+      false,
+    );
+    writeFileSync(join(attemptDir, "0003-dispatch-S-1.json"), JSON.stringify({
+      contract: "seedstack_child_attempt.v1",
+      role: "dispatch",
+      seed: "S-1",
+      iteration: 3,
+      state: "failed",
+    }) + "\n");
     assertCase(
       "unexpected dirty blocked",
       check({ repo: dir, seedstackDir: dir, runState: idle, scanFile: scanReady, adoptionCheck: adoption, dirtyResult: dirty, seedCli: "sd", pretty: false, selfTest: false }),

@@ -58,6 +58,21 @@ export function eventsPath(seedstackDir: string): string {
   return join(seedstackDir, "events.jsonl");
 }
 
+/** Directory holding durable child attempt ledgers. */
+export function childAttemptsDir(seedstackDir: string): string {
+  return join(seedstackDir, "child-attempts");
+}
+
+/** Durable per-child attempt ledger. */
+export function childAttemptPath(seedstackDir: string, iteration: number, role: string, seed: string): string {
+  return join(childAttemptsDir(seedstackDir), `${pad4(iteration)}-${role}-${seed}.json`);
+}
+
+/** Supervisor-owned failure capsule for child infra/recovery failures. */
+export function childFailureCapsulePath(seedstackDir: string, iteration: number, role: string, seed: string): string {
+  return join(childAttemptsDir(seedstackDir), `${pad4(iteration)}-${role}-${seed}-failure-capsule.md`);
+}
+
 /** Directory holding per-iteration artifacts. */
 export function loopDir(seedstackDir: string): string {
   return join(seedstackDir, "loop");

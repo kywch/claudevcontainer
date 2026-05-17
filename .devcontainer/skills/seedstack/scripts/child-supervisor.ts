@@ -1,7 +1,8 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { childAttemptPath } from "./seedstack-paths.ts";
 
 export type JsonObject = Record<string, unknown>;
 export type ChildRole = "dispatch" | "manage";
@@ -46,6 +47,31 @@ export type ChildResult = {
 
 export type ChildEmit = (event: string, data?: JsonObject) => void;
 
+export type ChildAttemptRecord = {
+  contract: "seedstack_child_attempt.v1";
+  attempt_id: string;
+  role: ChildRole;
+  seed: string;
+  iteration: number;
+  result_path: string;
+  prompt_path: string;
+  log_path: string;
+  pid: number | null;
+  pgid: number | null;
+  liveness_handle: string | null;
+  process_identity: JsonObject;
+  baseline_dirty_snapshot: JsonObject;
+  heartbeat: JsonObject;
+  state: "reserved" | "running" | "completed" | "timeout" | "failed" | "unknown_terminal_state";
+  fencing_token: string;
+  started_at: string;
+  updated_at: string;
+  ended_at?: string;
+  exit_code?: number | null;
+  signal?: string | null;
+  timeout?: ChildTimeoutKind | null;
+};
+
 export const DEFAULT_CHILD_TOTAL_TIMEOUT_MS = 60 * 60 * 1000;
 export const DEFAULT_CHILD_SILENT_TIMEOUT_MS = 20 * 60 * 1000;
 export const DEFAULT_CHILD_SILENT_PROBE_MS = 10 * 60 * 1000;
@@ -72,6 +98,7 @@ function resultPath(seedstackDir: string, label: string, seed: string, iteration
 }
 
 function writeJson(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
@@ -81,6 +108,60 @@ function readJson(path: string): unknown {
 
 function isObject(value: unknown): value is JsonObject {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function gitDirtySnapshot(repo: string): JsonObject {
+  const proc = spawnSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+    cwd: repo,
+    encoding: "utf8",
+    maxBuffer: 5 * 1024 * 1024,
+  });
+  const stdout = proc.stdout ?? "";
+  return {
+    command: "git status --porcelain=v1 --untracked-files=all",
+    exit_code: proc.status ?? null,
+    stdout,
+    paths: stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3).trim()).filter(Boolean),
+  };
+}
+
+function processIdentity(pid: number | undefined, repo: string): JsonObject {
+  if (!pid) return { pid: null, repo };
+  const statPath = `/proc/${pid}/stat`;
+  const cmdlinePath = `/proc/${pid}/cmdline`;
+  const cwdPath = `/proc/${pid}/cwd`;
+  let starttime: string | null = null;
+  let cmdline: string | null = null;
+  let cwd: string | null = null;
+  try {
+    const stat = readFileSync(statPath, "utf8").trim().split(/\s+/);
+    starttime = stat[21] ?? null;
+  } catch {
+    starttime = null;
+  }
+  try {
+    cmdline = readFileSync(cmdlinePath, "utf8").replace(/\0/g, " ").trim();
+  } catch {
+    cmdline = null;
+  }
+  try {
+    cwd = readFileSync(cwdPath, "utf8");
+  } catch {
+    cwd = repo;
+  }
+  return { pid, starttime, cmdline, cwd };
+}
+
+function writeAttempt(path: string, record: ChildAttemptRecord): void {
+  writeJson(path, record);
+}
+
+function withHeartbeat(record: ChildAttemptRecord, at: string, staleAfterMs: number): ChildAttemptRecord {
+  return {
+    ...record,
+    heartbeat: { at, stale_after_ms: staleAfterMs },
+    updated_at: at,
+  };
 }
 
 function stringField(value: unknown): string | null {
@@ -230,10 +311,34 @@ export async function runChild(
 ): Promise<ChildExit> {
   const pPath = promptPath(seedstackDir, role, seed, iteration);
   const lPath = logPath(seedstackDir, role, seed, iteration);
+  const attemptPath = childAttemptPath(seedstackDir, iteration, role, seed);
+  const attemptId = `${String(iteration).padStart(4, "0")}-${role}-${seed}`;
+  const startedAt = new Date().toISOString();
+  const baseAttempt: ChildAttemptRecord = {
+    contract: "seedstack_child_attempt.v1",
+    attempt_id: attemptId,
+    role,
+    seed,
+    iteration,
+    result_path: resultFile,
+    prompt_path: pPath,
+    log_path: lPath,
+    pid: null,
+    pgid: null,
+    liveness_handle: null,
+    process_identity: { pid: null, repo: options.repo },
+    baseline_dirty_snapshot: gitDirtySnapshot(options.repo),
+    heartbeat: { at: startedAt, stale_after_ms: Math.max(options.childSilentTimeoutMs, options.pollMs * 2) },
+    state: "reserved",
+    fencing_token: `${attemptId}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    started_at: startedAt,
+    updated_at: startedAt,
+  };
   writeFileSync(pPath, prompt);
   writeFileSync(lPath, "");
   rmSync(resultFile, { force: true });
-  emit(`${role}_child_start`, { seed, prompt_path: pPath, log_path: lPath, result_path: resultFile });
+  writeAttempt(attemptPath, baseAttempt);
+  emit(`${role}_child_start`, { seed, prompt_path: pPath, log_path: lPath, result_path: resultFile, attempt_path: attemptPath });
 
   return await new Promise((resolvePromise, reject) => {
     const isClaudeRunner = options.runner === "claude";
@@ -257,6 +362,16 @@ export async function runChild(
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, SEEDSTACK_RESULT_FILE: resultFile },
     });
+    let currentAttempt: ChildAttemptRecord = {
+      ...baseAttempt,
+      pid: child.pid ?? null,
+      pgid: process.platform !== "win32" ? (child.pid ?? null) : null,
+      liveness_handle: child.pid ? `pgid:${child.pid}` : null,
+      process_identity: processIdentity(child.pid, options.repo),
+      state: "running",
+      updated_at: new Date().toISOString(),
+    };
+    writeAttempt(attemptPath, currentAttempt);
     emit(`${role}_child_launch_provenance`, {
       seed,
       launcher: isClaudeRunner ? "claude_cli_supervisor" : "codex_cli_supervisor",
@@ -269,6 +384,7 @@ export async function runChild(
         ? { claude_model: options.claudeModel }
         : { codex_reasoning_effort: options.codexReasoningEffort }),
       result_path: resultFile,
+      attempt_path: attemptPath,
       result_is_child_run_status_evidence: false,
     });
     const started = Date.now();
@@ -280,6 +396,9 @@ export async function runChild(
     let timeoutSilentMs: number | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     const heartbeatTimer = setInterval(() => {
+      const now = new Date().toISOString();
+      currentAttempt = withHeartbeat(currentAttempt, now, Math.max(options.childSilentTimeoutMs, options.pollMs * 2));
+      writeAttempt(attemptPath, currentAttempt);
       emit(`${role}_heartbeat`, { seed, seconds: Math.floor((Date.now() - started) / 1000) });
     }, options.pollMs);
     const totalTimer = setTimeout(() => triggerTimeout("total"), options.childTotalTimeoutMs);
@@ -321,6 +440,18 @@ export async function runChild(
       timeoutElapsedMs = now - started;
       timeoutSilentMs = now - lastProgress;
       cachedResult = writeTimeoutChildResult(resultFile, role, seed, kind, timeoutElapsedMs, timeoutSilentMs);
+      const endedAt = new Date().toISOString();
+      currentAttempt = {
+        ...currentAttempt,
+        state: "timeout",
+        heartbeat: { at: endedAt, stale_after_ms: Math.max(options.childSilentTimeoutMs, options.pollMs * 2) },
+        updated_at: endedAt,
+        ended_at: endedAt,
+        timeout: kind,
+        exit_code: null,
+        signal: "SIGTERM",
+      };
+      writeAttempt(attemptPath, currentAttempt);
       emit(`${role}_child_timeout`, {
         seed,
         kind,
@@ -356,10 +487,36 @@ export async function runChild(
     child.stderr.on("data", noteProgress);
     child.on("error", (error) => {
       cleanupTimers();
+      const endedAt = new Date().toISOString();
+      currentAttempt = {
+        ...currentAttempt,
+        state: "failed",
+        heartbeat: { at: endedAt, stale_after_ms: Math.max(options.childSilentTimeoutMs, options.pollMs * 2) },
+        updated_at: endedAt,
+        ended_at: endedAt,
+        exit_code: null,
+        signal: null,
+        timeout: null,
+      };
+      writeAttempt(attemptPath, currentAttempt);
       reject(error);
     });
     child.on("close", (exitCode, signal) => {
       cleanupTimers();
+      if (!timeout) {
+        const endedAt = new Date().toISOString();
+        currentAttempt = {
+          ...currentAttempt,
+          state: exitCode === 0 ? "completed" : "failed",
+          heartbeat: { at: endedAt, stale_after_ms: Math.max(options.childSilentTimeoutMs, options.pollMs * 2) },
+          updated_at: endedAt,
+          ended_at: endedAt,
+          exit_code: exitCode,
+          signal: signal ?? null,
+          timeout: null,
+        };
+        writeAttempt(attemptPath, currentAttempt);
+      }
       emit(`${role}_child_exit`, {
         seed,
         exit_code: exitCode,
