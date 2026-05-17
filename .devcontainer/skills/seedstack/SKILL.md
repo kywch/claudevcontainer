@@ -167,11 +167,17 @@ a queue or run-state writer; update `run-state.json` only through
 
 The supervisor is the authority for continue/stop/done. It streams JSONL
 events to stdout and `<seedstack-dir>/events.jsonl`, persists loop epochs in
-`<seedstack-dir>/loop-state.json`, launches bounded child agents for one
-dispatch/manage step, and enforces the outer-loop invariants modeled in
-`quint/run_loop.qnt`. If the script exits `0`, report done. If it exits
-nonzero, report its JSON stop reason and do not continue manually except to
-fix the script or resolve an explicit blocker.
+`<seedstack-dir>/loop-state.json`, writes supervisor artifacts under
+`<seedstack-dir>/loop/`, launches bounded child agents for one dispatch/manage
+step, and enforces the outer-loop invariants modeled in `quint/run_loop.qnt`.
+`loop-state.loop_iteration` is the monotonic supervisor artifact allocator:
+new supervisor invocations start at `max(loop-state.loop_iteration, max
+existing loop/NNNN-*) + 1`, and same-seed retries allocate a fresh number
+instead of clobbering earlier attempt files. Recovery artifacts use
+`<seedstack-dir>/recovery/rec-####/`; do not write root-level recovery
+snapshots. If the script exits `0`, report done. If it exits nonzero, report
+its JSON stop reason and do not continue manually except to fix the script or
+resolve an explicit blocker.
 
 Manual run-loop fallback is allowed only when `seedstack-loop.ts` is missing or
 broken. Record `manual_loop_fallback` in run artifacts and stop after one
@@ -182,6 +188,17 @@ the next ready seed without asking after adoption is fixed. It must still pass
 an explicit work order id to dispatch, record the selection rationale in
 `run-state.json`, refresh `run.md`, and stop on escalation, dirty unexpected
 worktree, no-ready deadlock, loop cap, or failed gates.
+
+`--repo` may point at a main worktree, linked worktree, or subdirectory. Shared
+preflight normalizes it to the git worktree root and records original repo
+input, git dir, git common dir, branch, head, linked/main status, active
+worktree policy, and duplicate checks. The default `linked-ok` policy accepts
+linked worktrees but blocks same-branch duplicate linked worktrees unless the
+operator passes `--allow-same-branch-worktree` or
+`--worktree-policy allow-same-branch`. Use `--require-worktree` for canary runs
+that must fail on the main worktree. Dispatch children, manage children, Seeds
+CLI scans/mutations, dirty checks, reconciliation, and per-seed commits must
+use the normalized worktree root, not the caller cwd or git common dir.
 
 Before the first `run auto` dispatch, `.seeds/**` queue state must already be a
 clean git baseline. Create seeds, commit `.seeds/issues.jsonl` and any related
@@ -229,6 +246,12 @@ agents must be fresh and targeted. Full rules: `references/plan-review.md`.
 - Do not hand-edit `.seeds/**`. Use work queue CLI only.
 - Exception: `capture-knowledge` may append `.seeds/knowledge.jsonl` only;
   queue files remain Seedstack/work queue CLI owned.
+- Manage children are proposal-only. They must not run Seeds CLI mutation
+  commands or write `.seeds/**`; they return proposed queue operations with
+  preconditions and evidence. The supervisor applies allowlisted operations
+  using the configured `seed-cli` after a fresh scan/reconcile guard, records
+  argv/cwd/before-after state in run artifacts, and stops without partial
+  mutation on unsupported operations or failed preconditions.
 - Plan mode is non-implementation. Plan acceptance authorizes plan
   finalization only; it does not authorize editing repo code, invoking
   `dispatch-work`, running the stack loop, or starting

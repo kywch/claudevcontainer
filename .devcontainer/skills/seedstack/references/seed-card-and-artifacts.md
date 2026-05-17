@@ -144,14 +144,17 @@ Only create seeds when explicitly requested.
   <plan path="plan.md" />
   <adoption path="adoption.md" />
   <adoption_selection path="adoption-selection.json" />
-  <seedstack_scan path="scan.json" contract="seedstack_scan.v1" />
-  <dirty_result path="dirty-result.json" contract="dirty_state_classification.v1" />
-  <dispatch_reconcile_check path="dispatch-reconcile-check.json" contract="dispatch_reconcile_check.v1" />
-  <adoption_selection_check path="adoption-selection-check.json" contract="adoption_selection_check.v1" />
-  <loop_cap_check path="loop-cap-check.json" contract="loop_cap_check.v1" />
-  <run_transition_check path="run-transition-check.json" contract="run_transition_check.v1" />
-  <commit_check path="commit-check.json" contract="commit_ledger_check.v1" />
-  <update_run_state_result path="update-run-state-result.json" contract="update_run_state.v1" />
+  <loop_state path="loop-state.json" contract="seedstack_loop_state.v1" />
+  <loop_artifact path="loop/NNNN-<label>.json|log|prompt.md" contract="supervisor artifacts" />
+  <recovery_artifact path="recovery/rec-####/<artifact>.json|md" contract="recovery attempt artifacts" />
+  <seedstack_scan path="loop/NNNN-scan.json" contract="seedstack_scan.v1" />
+  <dirty_result path="loop/NNNN-dirty.json" contract="dirty_state_classification.v1" />
+  <dispatch_reconcile_check path="loop/NNNN-reconcile-<seed>.json" contract="dispatch_reconcile_check.v1" />
+  <adoption_selection_check path="loop/NNNN-adoption.json" contract="adoption_selection_check.v1" />
+  <loop_cap_check path="loop/NNNN-loop-cap.json" contract="loop_cap_check.v1" />
+  <run_transition_check path="loop/NNNN-transition-<from>-to-<to>.json" contract="run_transition_check.v1" />
+  <commit_check path="loop/NNNN-commit-ledger-<seed>.json" contract="commit_ledger_check.v1" />
+  <update_run_state_result path="loop/NNNN-update-<state>.json" contract="update_run_state.v1" />
   <knowledge_store path=".seeds/knowledge.jsonl" contract="append-only knowledge log" />
   <operator_run path="operator/operator_run.json" contract="operator.v1" />
   <operator_packet path="operator/<preflight|artifacts|verifier|recovery|knowledge>.packet.json" contract="operator.v1" />
@@ -175,6 +178,19 @@ Only create seeds when explicitly requested.
   <run path="run.md" />
 </artifacts>
 ```
+
+New run/recovery artifacts must not use root-level `scan.json`,
+`dirty-result.json`, `dispatch-reconcile-check.json`, `transition.json`, or
+similar recovery filenames. Keep stable top-level manifests such as
+`run-state.json`, `run.md`, `commit-ledger.md`, `adoption-selection.json`, and
+`loop-state.json`; place repeated supervisor outputs in `loop/` and recovery
+outputs in `recovery/rec-####/`.
+
+`loop-state.loop_iteration` owns supervisor artifact numbering, not
+`run-state.loop_iteration`. Allocation starts at
+`max(loop-state.loop_iteration, max existing loop/NNNN-*) + 1`; crash gaps are
+acceptable, overwrites are not. Same-seed retry allocates a fresh loop number
+before writing retry dirty, dispatch, manage, or reconciliation artifacts.
 
 ## Manage Event
 
@@ -250,6 +266,9 @@ with `state=idle` or a terminal state, and before every stop/resume. Use
 14. Latest knowledge capture state:
    `recorded|none_qualified|store_missing|skipped_user_waived`, capture point,
    and artifact path.
+15. Worktree metadata: original repo argument, normalized repo/worktree root,
+    git dir, git common dir, branch, head, linked/main status, active
+    worktree policy, and whether `--require-worktree` was active.
 
 Never represent a closed seed as active. `active_dispatch` is null unless a
 dispatch is currently unreconciled or in progress.

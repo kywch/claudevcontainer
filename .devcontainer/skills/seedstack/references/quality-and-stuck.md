@@ -32,6 +32,16 @@ Before presenting, check:
   the global spec line as a side effect of adding behavior
 - promotion/release seeds include gates for version-source sync, docs/sync
   markers, implementation target drift, and hardening gaps surfaced by review
+- final Seedstack review seeds inspect plan intent against landed
+  implementation, self-tests, and docs. They must explicitly cover artifact
+  layout (`loop/` plus `recovery/rec-####/`), monotonic `loop_iteration`
+  allocation and retry non-clobbering, linked-worktree support and same-branch
+  duplicate policy, proposal-only manage children, supervisor-applied queue
+  mutations with configured `seed-cli`, and residual stale-state/dirty-guard
+  risks.
+- docs must not recommend new root-level recovery artifact files. Repeated run
+  evidence belongs under `loop/`; recovery attempts belong under
+  `recovery/rec-####/`.
 
 Before creation, deterministic checks must pass:
 

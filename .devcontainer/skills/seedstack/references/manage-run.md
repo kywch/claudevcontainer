@@ -74,6 +74,27 @@ subagents never mutate queue files, run the queue CLI, or execute recovery
 actions. The main agent receives only `operator/operator_summary.json` as
 compact context and keeps queue mutation Seedstack-owned.
 
+## Manage Queue Proposals
+
+Manage children are proposal-only. They may classify a dispatch result and
+recommend queue operations, but they must not run Seeds CLI mutation commands
+such as `sd close`, `sd create`, dependency edits, label edits, or priority
+edits, and they must not write `.seeds/**` directly.
+
+Structured proposals may express `close-current`, `create-follow-up`,
+`add-dependency`, `adjust-labels`, or `no-op`. Each proposal records the target
+seed, rationale, source artifact refs, expected preconditions, and whether it
+is required for safe continuation. A proposal is not a mutation grant.
+
+The supervisor/main process owns all queue mutation. Before applying any
+proposal, it performs a fresh scan/reconcile guard in the normalized worktree,
+verifies the proposal preconditions still match current queue state, and uses
+the configured `seed-cli` path. It records command argv, cwd, before/after seed
+ids, resulting dirty queue paths, and applied operation ids in run artifacts.
+Unsupported operations, stale preconditions, attempts to close a non-current
+seed, or multiple mutating operations that would risk partial application stop
+the run before mutation.
+
 ## Mutation Eligibility
 
 Allowed through work queue CLI only:
@@ -264,9 +285,20 @@ has unclear local state. These commands are read-only until the final
 bun skills/seedstack/scripts/scan-seedspec-cli.ts \
   --repo . \
   --cli sd \
+  --worktree-policy linked-ok \
   --adoption-selection tmp/seedstack/<slug>/adoption-selection.json \
   --pretty
 ```
+
+`--repo` is normalized to the git worktree root before scans, dirty checks,
+child launch, queue mutation, and commit operations. The scanner records the
+original repo argument, normalized repo, git dir, git common dir, branch, head,
+linked/main worktree status, and active policy. Default policy is `linked-ok`:
+linked worktrees are accepted, same-branch duplicate linked worktrees are
+blocked, and `--allow-same-branch-worktree` or
+`--worktree-policy allow-same-branch` is required to override. Add
+`--require-worktree` when an operator intentionally wants the command to fail
+outside a linked worktree.
 
 2. Check adoption selection:
 
@@ -370,6 +402,13 @@ bun skills/seedstack/scripts/check-recovery-state.ts \
 It emits `recovery_check.v1` with `next_safe_command`. It is advisory only,
 does not mutate queue or run artifacts, and is not wired into
 `seedstack-loop.ts`.
+
+Recovery artifacts are grouped by attempt under
+`tmp/seedstack/<slug>/recovery/rec-####/`. Use canonical recovery paths such as
+`recovery/rec-0001/scan.json`, `dirty.json`, `validation.json`,
+`reconcile.json`, `transition.json`, `commit-check.json`,
+`recovery-check.json`, and `notes.md`. Do not create root-level recovery files
+for new runs.
 
 Recovery decisions:
 
@@ -482,6 +521,37 @@ JSONL events and a final JSON event. Persist each JSON result before passing it
 to the next checker/tool. Continue only when `ok=true`; for contracts that
 expose `decision`, also require the expected decision for that step. Exit code 1
 means the check failed; exit code 2 means usage or tool failure.
+
+## Supervisor Artifact Layout
+
+Run-loop artifacts use Option 1.5 layout:
+
+```text
+tmp/seedstack/<slug>/
+  loop-state.json
+  loop/
+    0001-scan.json
+    0001-dispatch-<seed>.log
+    0002-pre-manage-dirty-<seed>.json
+  recovery/
+    rec-0001/
+      manifest.json
+      scan.json
+      dirty.json
+      validation.json
+      reconcile.json
+      transition.json
+      commit-check.json
+      recovery-check.json
+      notes.md
+```
+
+`loop-state.loop_iteration` means the last allocated supervisor artifact
+number. New supervisor processes allocate
+`max(loop-state.loop_iteration, max existing loop/NNNN-*) + 1`; this may leave
+a gap after a crash but must not overwrite earlier artifacts. Managed
+same-seed retry also allocates a fresh loop number before dirty checks or
+child launch, so retry logs and results remain non-clobbering.
 
 ## Auto Run Mode
 
