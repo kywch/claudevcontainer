@@ -9,6 +9,10 @@
 !CLAUDE.md
 !AGENTS.md
 
+# Seeds issue tracking
+!/.seeds/
+!/.seeds/**
+
 # VS Code workspace settings (watcher excludes etc.)
 !.vscode/
 !.vscode/settings.json
