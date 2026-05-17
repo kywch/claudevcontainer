@@ -417,6 +417,7 @@ const LOOP_SOFT_BLOCKERS = new Set([
   "prompt_preserve_dirty_paths_missing_attr",
   "prompt_child_contract_missing_dirty_baseline",
   "gate_dirty_guard_missing_actual_paths",
+  "gate_dirty_guard_snapshot_mismatch",
   "missing_launch_evidence_path",
   "missing_launch_evidence_owner",
   "invalid_liveness_handle",

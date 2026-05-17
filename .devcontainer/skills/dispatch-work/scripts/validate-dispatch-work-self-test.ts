@@ -472,6 +472,26 @@ export function runSelfTest(pretty: boolean): number {
     writeStructuredDirtyGuardGate(structuredGuardRepo, seed, "snapshot.json", ["src/fixture.ts"]);
     const structuredGuard = validateDispatch({ ...parseArgs([]), repo: structuredGuardRepo, seed, dirtyStatusFile: structuredGuardSnapshotPath });
 
+    const structuredSnapshotMismatchRepo = join(root, "structured-snapshot-mismatch-repo");
+    makeFixtureRound(structuredSnapshotMismatchRepo, seed, join(structuredSnapshotMismatchRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    setRepoEditRoots(structuredSnapshotMismatchRepo, seed, "src/fixture.ts");
+    const supervisorSnapshotPath = join(structuredSnapshotMismatchRepo, "supervisor-snapshot.json");
+    writeFileSync(supervisorSnapshotPath, `${JSON.stringify(snapshotFromStatus(structuredSnapshotMismatchRepo, " M src/fixture.ts\n"))}\n`);
+    writeStructuredDirtyGuardGate(structuredSnapshotMismatchRepo, seed, "tmp/dispatch-work/seedspec-test/dirty-status.txt", ["src/fixture.ts"]);
+    const structuredSnapshotMismatchStrict = validateDispatch({
+      ...parseArgs([]),
+      repo: structuredSnapshotMismatchRepo,
+      seed,
+      dirtyStatusFile: supervisorSnapshotPath,
+    });
+    const structuredSnapshotMismatchLoop = validateDispatch({
+      ...parseArgs([]),
+      repo: structuredSnapshotMismatchRepo,
+      seed,
+      dirtyStatusFile: supervisorSnapshotPath,
+      validationPolicy: "loop",
+    });
+
     const structuredBeatsMarkdownRepo = join(root, "structured-beats-markdown-repo");
     makeFixtureRound(structuredBeatsMarkdownRepo, seed, join(structuredBeatsMarkdownRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
     setRepoEditRoots(structuredBeatsMarkdownRepo, seed, "src/fixture.ts");
@@ -487,6 +507,13 @@ export function runSelfTest(pretty: boolean): number {
     writeFileSync(structuredMismatchSnapshotPath, `${JSON.stringify(snapshotFromStatus(structuredMismatchRepo, " M src/fixture.ts\n"))}\n`);
     writeStructuredDirtyGuardGate(structuredMismatchRepo, seed, "snapshot.json", ["src/other.ts"]);
     const structuredMismatch = validateDispatch({ ...parseArgs([]), repo: structuredMismatchRepo, seed, dirtyStatusFile: structuredMismatchSnapshotPath });
+    const structuredMismatchLoop = validateDispatch({
+      ...parseArgs([]),
+      repo: structuredMismatchRepo,
+      seed,
+      dirtyStatusFile: structuredMismatchSnapshotPath,
+      validationPolicy: "loop",
+    });
 
     const queueMutationRepo = join(root, "queue-mutation-repo");
     makeFixtureRound(queueMutationRepo, seed, join(queueMutationRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
@@ -628,8 +655,11 @@ export function runSelfTest(pretty: boolean): number {
       { name: "semicolon area passes", pass: semicolonArea.ok, blockers: semicolonArea.blockers.length },
       { name: "dirty guard actual path mismatch blocks", pass: !dirtyGuardMismatch.ok && dirtyGuardMismatch.blockers.some((finding) => finding.code === "gate_dirty_guard_path_mismatch"), blockers: dirtyGuardMismatch.blockers.length },
       { name: "structured dirty guard matching snapshot passes", pass: structuredGuard.ok, blockers: structuredGuard.blockers.length },
+      { name: "strict dirty guard snapshot mismatch blocks", pass: !structuredSnapshotMismatchStrict.ok && structuredSnapshotMismatchStrict.blockers.some((finding) => finding.code === "gate_dirty_guard_snapshot_mismatch"), blockers: structuredSnapshotMismatchStrict.blockers.length },
+      { name: "loop dirty guard snapshot mismatch softens", pass: structuredSnapshotMismatchLoop.ok && (structuredSnapshotMismatchLoop.soft_blockers ?? []).some((finding) => finding.code === "gate_dirty_guard_snapshot_mismatch"), blockers: structuredSnapshotMismatchLoop.blockers.length },
       { name: "structured dirty guard overrides malformed markdown", pass: structuredBeatsMarkdown.ok, blockers: structuredBeatsMarkdown.blockers.length },
       { name: "structured dirty guard mismatch blocks", pass: !structuredMismatch.ok && structuredMismatch.blockers.some((finding) => finding.code === "gate_dirty_guard_structured_mismatch"), blockers: structuredMismatch.blockers.length },
+      { name: "loop structured dirty guard mismatch stays hard", pass: !structuredMismatchLoop.ok && structuredMismatchLoop.blockers.some((finding) => finding.code === "gate_dirty_guard_structured_mismatch"), blockers: structuredMismatchLoop.blockers.length },
       { name: "queue mutation dirty blocks", pass: !queueMutation.ok && queueMutation.blockers.some((finding) => finding.code === "gate_queue_mutation_dirty"), blockers: queueMutation.blockers.length },
       { name: "manager-owned issues dirty allowed", pass: managerQueueMutation.ok, blockers: managerQueueMutation.blockers.length },
       { name: "dirty snapshot clean ignores live git dirtiness", pass: snapshotClean.ok, blockers: snapshotClean.blockers.length },
