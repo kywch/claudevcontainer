@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { LAUNCH_EVIDENCE_CONTRACT, STATUS_CONTRACT } from "./dispatch-work-contracts.ts";
 import { childRunPaths } from "./dispatch-work-paths.ts";
+import { VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE } from "./knowledge-capture-validation.ts";
 import type { ReportRole } from "./validate-dispatch-work.ts";
 
 export function writeSeedIssue(repo: string, seed: string, area: string) {
@@ -104,18 +105,7 @@ export function makeFixtureRound(
 }
 
 export function richNoneQualifiedKnowledgeCapture(): string {
-  return [
-    "capture_state=none_qualified",
-    "store_count: 0",
-    "merge_union: false",
-    "marker_count: 0",
-    "artifacts_reviewed: 4",
-    "candidate_count: 0",
-    "rejected_count: 0",
-    "accepted IDs: []",
-    "none_rationale: No durable cross-session knowledge candidates in fixture artifacts.",
-    "",
-  ].join("\n");
+  return VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE;
 }
 
 function reportFixture(

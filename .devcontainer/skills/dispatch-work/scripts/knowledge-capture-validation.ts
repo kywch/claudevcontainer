@@ -3,6 +3,19 @@ import { existsSync, readFileSync } from "node:fs";
 export const KNOWLEDGE_CAPTURE_STATES = new Set(["recorded", "none_qualified", "store_missing", "skipped_user_waived"]);
 export const KNOWLEDGE_RECORD_TYPES = new Set(["convention", "pattern", "failure", "decision", "reference", "guide"]);
 
+export const VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE = [
+  "capture_state=none_qualified",
+  "store_count: 0",
+  "merge_union: true",
+  "marker_count: 0",
+  "artifacts_reviewed: 4",
+  "candidate_count: 0",
+  "rejected_count: 0",
+  "accepted IDs: []",
+  "none_rationale: No durable cross-session knowledge candidates qualified for capture.",
+  "",
+].join("\n");
+
 export type KnowledgeCandidate = { type: string; content: string };
 
 export type KnowledgeCaptureValidation = {

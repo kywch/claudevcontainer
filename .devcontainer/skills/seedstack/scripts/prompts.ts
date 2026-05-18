@@ -10,8 +10,16 @@ import {
   terminalEventPath,
   eventsDir,
 } from "../../dispatch-work/scripts/dispatch-work-paths.ts";
+import {
+  VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE,
+  validateKnowledgeCaptureText,
+} from "../../dispatch-work/scripts/knowledge-capture-validation.ts";
 
 export function buildDispatchPrompt(repo: string, seed: string, resultFile: string): string {
+  const validNoneQualified = validateKnowledgeCaptureText(VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE);
+  if (!validNoneQualified.ok) {
+    throw new Error(`invalid built-in knowledge capture template: ${validNoneQualified.errors.join("; ")}`);
+  }
   return `Use the dispatch-work skill.
 
 Repo: ${repo}
@@ -46,6 +54,22 @@ Artifact paths (use exactly, do not invent names):
 - Events dir: ${eventsDir(seed)}
 - For research 3+, continue the numeric pattern.
 - Knowledge scout is pre-work context from existing .seeds/knowledge.jsonl; knowledge capture is post-work audit/recording output at ${dispatchRoot(seed)}/knowledge-capture.md.
+- knowledge-capture.md is required for close/done and must validate with validateKnowledgeCaptureText.
+- Required knowledge-capture.md schema fields for none_qualified: capture_state, store_count, merge_union, marker_count, artifacts_reviewed, candidate_count, rejected_count, and none_rationale or rationale.
+- Old prose/status-only none_qualified is invalid for close/done. Example invalid text: capture_state=none_qualified plus accepted IDs: [] only.
+- Minimal valid none_qualified example:
+
+\`\`\`text
+${VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE.trimEnd()}
+\`\`\`
+
+- For capture_state=recorded, use accepted IDs such as \`accepted IDs: [ex-1a2b3c]\` or structured accepted_records JSON accepted by validator:
+
+\`\`\`json
+{"accepted_records":[{"type":"failure","content":"When condition occurs, action fails. Cause: root cause. Do: corrective action. Verify: focused gate. Limit: bounded scope."}]}
+\`\`\`
+
+- Prose-only "accepted records" is invalid; accepted records must be explicit JSON with valid type/content and no evidence field.
 - Done and escalate are mutually exclusive — use seq 001 for whichever applies. The gate decision may contain "close" for legacy validator compatibility; it does not mean queue close.
 - Write any unlisted dispatch-work artifacts under ${dispatchRoot(seed)}/.
 - Set decision to exactly one of: closed, blocked, escalated, crashed.

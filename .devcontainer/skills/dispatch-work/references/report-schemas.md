@@ -299,7 +299,12 @@ Research, Review, and Verify reports must include one of:
 For `capture_state=none_qualified`, the audit must still include these minimal
 fields: existing store count, merge-union check, marker count, artifacts
 reviewed, candidate count, rejected count, and an explicit none/rejected
-rationale.
+rationale. Prose/status-only `none_qualified` reports are invalid for
+close/done.
+
+For `capture_state=recorded`, accepted records must be represented as accepted
+IDs already present in the store or as structured `accepted_records` JSON that
+the validator can parse. Prose-only accepted-record summaries are invalid.
 
 Final Dispatcher reports include a `Knowledge Capture` block with
 `knowledge-capture.md`, capture_state, accepted IDs, rejected count, marker
