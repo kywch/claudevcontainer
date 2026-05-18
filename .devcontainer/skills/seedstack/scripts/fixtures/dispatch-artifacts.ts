@@ -67,6 +67,7 @@ export function writeDispatchRound(options: DispatchRoundOptions): string {
       ? dirtyPaths.map((path) => `- known dirty path: \`${path}\``)
       : ["Known dirty paths: none."]),
   ].join("\n"));
+  write(options.repo, `tmp/dispatch-work/${seed}/knowledge-capture.md`, richNoneQualifiedKnowledgeCapture());
 
   return `${roundRoot}`;
 }
@@ -81,6 +82,20 @@ function write(repo: string, repoRel: string, content: string): void {
   const file = join(repo, repoRel);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, content);
+}
+
+function richNoneQualifiedKnowledgeCapture(): string {
+  return [
+    "capture_state=none_qualified",
+    "store_count: 0",
+    "merge_union: true",
+    "marker_count: 0",
+    "artifacts_reviewed: 4",
+    "candidate_count: 0",
+    "rejected_count: 0",
+    "none_rationale: No durable cross-session knowledge candidates in fixture artifacts.",
+    "",
+  ].join("\n");
 }
 
 function report(

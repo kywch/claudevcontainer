@@ -43,6 +43,10 @@ import {
 } from "./seedstack-paths.ts";
 import { preflightRepo, type WorktreeMetadata, type WorktreePolicy } from "./worktree-preflight.ts";
 import { writeDispatchRound } from "./fixtures/dispatch-artifacts.ts";
+import {
+  KNOWLEDGE_RECORD_TYPES,
+  validateKnowledgeCaptureText,
+} from "../../dispatch-work/scripts/knowledge-capture-validation.ts";
 
 type JsonObject = Record<string, unknown>;
 type RunStateName = "idle" | "dispatching" | "managing" | "done" | "exhausted" | "blocked" | "escalated" | "loop_cap";
@@ -135,7 +139,7 @@ Args:
   --mode <auto|manual>             Default: auto.
   --commit-policy <none|per_seed>   Default: per_seed in auto, none in manual.
   --knowledge-capture <off|audit|record>
-                                    Knowledge capture policy after clean close. Default: audit.
+                                    Knowledge capture policy before clean-close queue mutations. Default: audit.
   --knowledge-required              Block when knowledge capture check fails.
   --codex-bin <path>               Codex binary for child steps. Default: codex.
   --codex-reasoning-effort <level> Codex reasoning effort for child steps.
@@ -166,8 +170,6 @@ const SEEDSTACK_DIR = dirname(SCRIPT_DIR);
 const WORKSPACE_ROOT = resolve(SCRIPT_DIR, "../../../..");
 const DISPATCH_SEED_DIR = resolve(SEEDSTACK_DIR, "..", "dispatch-work");
 const KNOWLEDGE_STORE_SCRIPT = "/workspace/.devcontainer/skills/capture-knowledge/knowledge-store.ts";
-const KNOWLEDGE_RECORD_TYPES = new Set(["convention", "pattern", "failure", "decision", "reference", "guide"]);
-const KNOWLEDGE_CAPTURE_STATES = new Set(["recorded", "none_qualified", "store_missing", "skipped_user_waived"]);
 
 function usage(exitCode: 0 | 2): never {
   (exitCode === 0 ? process.stdout : process.stderr).write(HELP);
@@ -1464,27 +1466,6 @@ function markdownSectionLabel(line: string): string | null {
   return raw ? raw.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ") : null;
 }
 
-function knowledgeAuditValidation(
-  auditPresent: boolean,
-  auditText: string,
-  captureState: string | null,
-  candidates: Array<{ type: string; content: string }>,
-  acceptedIds: string[],
-): { ok: boolean; state: string; errors: string[] } {
-  if (!auditPresent) return { ok: false, state: "audit_missing", errors: ["knowledge-capture.md missing"] };
-  const errors: string[] = [];
-  if (auditText.trim().length === 0) errors.push("knowledge-capture.md empty");
-  if (!captureState) errors.push("capture_state missing");
-  else if (!KNOWLEDGE_CAPTURE_STATES.has(captureState)) errors.push(`capture_state invalid: ${captureState}`);
-  if (captureState === "recorded" && candidates.length === 0 && acceptedIds.length === 0) {
-    errors.push("recorded capture requires accepted_records or accepted IDs");
-  }
-  if (captureState === "none_qualified" && candidates.length > 0) {
-    errors.push("none_qualified capture cannot include accepted_records");
-  }
-  return errors.length === 0 ? { ok: true, state: captureState ?? "audit_present", errors } : { ok: false, state: "audit_invalid", errors };
-}
-
 function baseKnowledgeCaptureCheck(seed: string, mode: Options["knowledgeCapture"]): JsonObject {
   const auditPath = knowledgeCapturePath(seed);
   const auditPresent = existsSync(auditPath);
@@ -1492,10 +1473,10 @@ function baseKnowledgeCaptureCheck(seed: string, mode: Options["knowledgeCapture
   const storePath = knowledgeStorePath();
   const store = knowledgeStoreLineCount(storePath);
   const gitState = knowledgeStoreGitState();
-  const candidates = extractStructuredKnowledgeCandidates(auditText);
-  const captureState = auditPresent ? parseKnowledgeCaptureState(auditText) : null;
-  const acceptedIds = auditPresent ? parseAcceptedIds(auditText) : [];
-  const auditValidation = knowledgeAuditValidation(auditPresent, auditText, captureState, candidates, acceptedIds);
+  const auditValidation = validateKnowledgeCaptureText(auditText, auditPresent);
+  const captureState = auditValidation.captureState;
+  const candidates = auditValidation.structuredCandidates;
+  const acceptedIds = auditValidation.acceptedIds;
   const captureOk = auditValidation.ok && captureState !== "store_missing";
   return {
     contract: "knowledge_capture_check.v1",
@@ -1515,7 +1496,13 @@ function baseKnowledgeCaptureCheck(seed: string, mode: Options["knowledgeCapture
       capture_state: captureState,
       valid: auditValidation.ok,
       errors: auditValidation.errors,
-      marker_count: (auditText.match(/<!--\s*KNOWLEDGE:/g) ?? []).length,
+      marker_count: auditValidation.audit.markerCount,
+      store_count: auditValidation.audit.storeCount ?? null,
+      merge_union: auditValidation.audit.mergeUnion ?? null,
+      artifacts_reviewed: auditValidation.audit.artifactsReviewed ?? null,
+      candidate_count: auditValidation.audit.candidateCount ?? null,
+      rejected_count: auditValidation.audit.rejectedCount ?? null,
+      rationale_present: auditValidation.audit.rationalePresent,
       accepted_ids: acceptedIds,
       structured_candidates_count: candidates.length,
       structured_candidates: candidates,
@@ -1596,6 +1583,25 @@ function runKnowledgeCaptureStep(seedstackDir: string, iteration: number, seed: 
   emit(seedstackDir, "knowledge_capture", {
     seed,
     mode,
+    ok: ok(check),
+    state: stringField(check.state) ?? null,
+    path,
+  });
+  if (knowledgeCaptureBlocksRequired(check)) {
+    stop(seedstackDir, iteration, "blocked", "knowledge_capture_required_failed", {
+      seed,
+      knowledge_capture: path,
+      state: stringField(check.state) ?? null,
+    });
+  }
+}
+
+function runRequiredKnowledgeCaptureAudit(seedstackDir: string, iteration: number, seed: string): void {
+  if (!optionsGlobal.knowledgeRequired) return;
+  const check = baseKnowledgeCaptureCheck(seed, "audit");
+  const path = writeLoopJson(seedstackDir, iteration, `knowledge-capture-required-${seed}`, check);
+  emit(seedstackDir, "knowledge_capture_required", {
+    seed,
     ok: ok(check),
     state: stringField(check.state) ?? null,
     path,
@@ -2561,6 +2567,7 @@ async function runLoop(): Promise<never> {
       }
       const shouldApplyQueueOps = childResult.decision === "continue_other_seeds" || childResult.decision === "done";
       const hasNonNoopProposal = proposedOps.some((proposal) => stringField(proposal.op_type) !== "no-op");
+      if (shouldApplyQueueOps) runRequiredKnowledgeCaptureAudit(seedstackDir, iteration, seed);
       if (shouldApplyQueueOps) {
         const queueOps = applyManageQueueOperations(seedstackDir, iteration, seed, preScan, reconcilePath, proposedOps);
         const queueOpsPath = writeLoopJson(seedstackDir, iteration, `manage-queue-ops-${seed}`, queueOps);
@@ -3533,7 +3540,17 @@ if (role === "dispatch") {
     "Verdict: pass",
     "",
   ].join("\\n"));
-  writeFileSync(join(dispatchRoot, "knowledge-capture.md"), "capture_state=none_qualified\\naccepted IDs: []\\n");
+  writeFileSync(join(dispatchRoot, "knowledge-capture.md"), [
+    "capture_state=none_qualified",
+    "store_count: 0",
+    "merge_union: true",
+    "marker_count: 0",
+    "artifacts_reviewed: 4",
+    "candidate_count: 0",
+    "rejected_count: 0",
+    "none_rationale: No durable cross-session knowledge candidates in fixture artifacts.",
+    "",
+  ].join("\\n"));
   writeFileSync(join(dispatchRoot, "gate.md"), [
     "# Gate: " + seed,
     "",
@@ -3903,7 +3920,19 @@ async function selfTest(pretty: boolean): Promise<never> {
     const init = spawnSync("git", ["init"], { cwd: knowledgeRepo, encoding: "utf8" });
     assertSelfTest((init.status ?? 1) === 0, "knowledge self-test git init");
     mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-empty"), { recursive: true });
-    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-empty", "knowledge-capture.md"), "capture_state=none_qualified\naccepted IDs: []\n");
+    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-empty", "knowledge-capture.md"), [
+      "capture_state=none_qualified",
+      "store_count: 0",
+      "merge_union: true",
+      "marker_count: 0",
+      "artifacts_reviewed: 4",
+      "candidate_count: 0",
+      "rejected_count: 0",
+      "none_rationale: No durable cross-session knowledge candidates in fixture artifacts.",
+      "",
+    ].join("\n"));
+    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-shallow"), { recursive: true });
+    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-shallow", "knowledge-capture.md"), "capture_state=none_qualified\naccepted IDs: []\n");
     mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-invalid"), { recursive: true });
     writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-invalid", "knowledge-capture.md"), "\n");
     mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-recorded"), { recursive: true });
@@ -3930,6 +3959,9 @@ async function selfTest(pretty: boolean): Promise<never> {
     const invalidAudit = baseKnowledgeCaptureCheck("seed-invalid", "audit");
     assertSelfTest(!ok(invalidAudit) && stringField(invalidAudit.state) === "audit_invalid", "knowledge invalid audit rejected");
     assertSelfTest(knowledgeCaptureBlocksRequired(invalidAudit), "required invalid audit blocks");
+    const shallowAudit = baseKnowledgeCaptureCheck("seed-shallow", "audit");
+    assertSelfTest(!ok(shallowAudit) && stringField(shallowAudit.state) === "audit_invalid", "knowledge shallow audit rejected");
+    assertSelfTest(knowledgeCaptureBlocksRequired(shallowAudit), "required shallow audit blocks");
     const emptyAudit = baseKnowledgeCaptureCheck("seed-empty", "audit");
     assertSelfTest(ok(emptyAudit) && stringField(emptyAudit.state) === "none_qualified", "knowledge none qualified audit succeeds");
     assertSelfTest(!knowledgeCaptureBlocksRequired(emptyAudit), "required none qualified audit passes");
