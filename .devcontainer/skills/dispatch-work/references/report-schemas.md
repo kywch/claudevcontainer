@@ -275,6 +275,16 @@ nonterminal data for `seedstack` manage mode.
 Dispatcher, Execute, Implement, Review, Verify, and dispatch children must not
 mutate it directly.
 
+`knowledge-scout.md` is pre-work context selection from existing knowledge.
+`knowledge-capture.md` is post-work audit and optional recording output at
+`tmp/dispatch-work/<work-id>/knowledge-capture.md`.
+
+Research, Review, and Verify reports must include one of:
+
+- a concrete `<!-- KNOWLEDGE: type=<type> | <one-line description> -->`
+  candidate marker
+- `knowledge: none - <specific reason>`
+
 `knowledge-capture.md` records:
 
 - capture_state:
@@ -285,6 +295,11 @@ mutate it directly.
 - rejected candidates with recording-gate reason
 - accepted records as self-contained JSON without `evidence`
 - store count before/after and record command outputs
+
+For `capture_state=none_qualified`, the audit must still include these minimal
+fields: existing store count, merge-union check, marker count, artifacts
+reviewed, candidate count, rejected count, and an explicit none/rejected
+rationale.
 
 Final Dispatcher reports include a `Knowledge Capture` block with
 `knowledge-capture.md`, capture_state, accepted IDs, rejected count, marker

@@ -93,9 +93,9 @@ upserts (updates timestamp) instead of duplicating.
 must include `id`, `type`, `content`, and `recorded_at`; missing fields or
 invalid shapes are rejected instead of being repaired implicitly.
 
-`content` must stand alone if `tmp/dispatch/<seed-id>/**` is deleted. Do not rely on
-artifact paths, transcripts, or external evidence to explain what happened or
-what to do next. Use this compact shape when possible:
+`content` must stand alone if `tmp/dispatch-work/<seed-id>/**` is deleted. Do
+not rely on artifact paths, transcripts, or external evidence to explain what
+happened or what to do next. Use this compact shape when possible:
 
 `When <scope>, beware <symptom>. Cause: <why>. Do: <action>. Verify: <gate/test/oracle>. Limit: <when not to apply>.`
 
@@ -129,8 +129,8 @@ Before recording, ask:
 3. **Is it durable?** Will this still be true next week?
 4. **Is it already documented?** Check CLAUDE.md / AGENTS.md first.
 5. **Does it duplicate an existing record?** Read the store first.
-6. **Is it self-contained?** Would it remain actionable if `tmp/dispatch/<seed-id>/**`
-   and all supporting artifacts were deleted?
+6. **Is it self-contained?** Would it remain actionable if
+   `tmp/dispatch-work/<seed-id>/**` and all supporting artifacts were deleted?
 
 If any answer is "no", don't record. Typical yield: **0-3 records per
 session**. If you're recording more, your gate is too loose.
@@ -159,11 +159,13 @@ Each subagent should:
 Subagent prompt template:
 
 ```
-Read all artifacts in tmp/dispatch/<seed-id>/. Also read .seeds/knowledge.jsonl
+Read all artifacts in tmp/dispatch-work/<seed-id>/. Also read .seeds/knowledge.jsonl
 for existing records.
 
 Extract knowledge candidates:
 - Scan for <!-- KNOWLEDGE: ... --> markers
+- Treat `knowledge: none - <specific reason>` as an explicit no-candidate
+  assertion for that artifact.
 - Identify unmarked non-obvious insights (gotchas, failures, decisions)
 - Apply the recording gate: non-obvious? specific? durable? not in docs? not duplicate? self-contained without tmp artifacts?
 - Return ONLY candidates that pass all checks as JSON:
@@ -176,17 +178,22 @@ Do NOT edit any files.
 ### Step 3 — Write capture audit
 
 For each dispatch completion or failed execute round, start
-`tmp/dispatch/<seed-id>/knowledge-capture.md` before recording and complete it
-after record commands finish. Include:
+`tmp/dispatch-work/<seed-id>/knowledge-capture.md` before recording and
+complete it after record commands finish. Include:
 
 - existing store count and whether `.seeds/.gitattributes` has
   `knowledge.jsonl merge=union`
-- marker scan result
-- candidates considered
+- marker scan result, including marker count
+- artifacts reviewed
+- candidates considered, including candidate count
 - rejected candidates with gate reason
 - accepted records as JSON without `evidence`
-- accepted IDs
+- accepted IDs and rejected count
 - store count before/after and record command outputs
+
+If no candidate qualifies, set `capture_state=none_qualified` and include:
+store count, merge-union check, marker count, artifacts reviewed, candidate
+count, rejected count, and an explicit none/rejected rationale.
 
 ### Step 4 — Record
 
@@ -223,6 +230,10 @@ during its work. The marker format:
 Markers lower the extraction cost — subagents can grep for them — but
 the recording gate still applies. A marker does not guarantee recording.
 
+Research, Review, and Verify artifacts should include either a concrete marker
+or `knowledge: none - <specific reason>` so capture can audit intentional
+non-recording decisions.
+
 ### Step 5 — Curate if needed
 
 Check the count:
@@ -258,7 +269,7 @@ Target: **under 80 records, ideally 40-60**.
 
 At the start of Research or any context-gathering phase, spawn a subagent
 to read `.seeds/knowledge.jsonl` and write
-`tmp/dispatch/<seed-id>/knowledge-scout.md`. The scout filters records
+`tmp/dispatch-work/<seed-id>/knowledge-scout.md`. The scout filters records
 relevant to the current work order's domain, files, and acceptance criteria.
 Include IDs plus a short applicability reason, and include a brief
 "not relevant" section for high-risk ignored records to prevent prompt bloat.

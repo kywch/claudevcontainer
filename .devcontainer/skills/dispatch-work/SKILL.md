@@ -40,7 +40,7 @@ provided by `seedstack`.
 3. Normalize input into `work-order.md` with `contract: work-order.v1`.
    In prompt mode, ask the user for missing critical fields before Research
    when omission would risk wrong scope, acceptance, or verification.
-4. Spawn a knowledge scout if `.seeds/knowledge.jsonl` exists; write
+4. Spawn a pre-work knowledge scout if `.seeds/knowledge.jsonl` exists; write
    `knowledge-scout.md`. Treat the store as read-only during dispatch.
 5. Spawn Research agents as needed. They write `research-<i>.md`.
 6. Write `source-hints.json` and `packet.md` from work order, research,
@@ -53,8 +53,10 @@ provided by `seedstack`.
    `bun skills/dispatch-work/scripts/validate-dispatch-work.ts --work-order <work-id>`.
 11. Gate as Dispatcher. Decision is exactly one of:
    `done`, `retry`, or `escalate`.
-12. Record knowledge capture state. Only the `capture-knowledge` step may
-   append `.seeds/knowledge.jsonl`; dispatch children never mutate `.seeds/**`.
+12. Record post-work knowledge capture state in
+   `tmp/dispatch-work/<work-id>/knowledge-capture.md`. Only the
+   `capture-knowledge` step may append `.seeds/knowledge.jsonl`; dispatch
+   children never mutate `.seeds/**`.
 
 Load references only when needed:
 
@@ -113,6 +115,10 @@ No role mutates queue state; queue context is read-only.
 - Do not hand-edit `.seeds/**`, except `capture-knowledge` may append
   `.seeds/knowledge.jsonl` through its tool when its recording gate passes.
   Use capture states `recorded|none_qualified|store_missing|skipped_user_waived`.
+- `knowledge-scout.md` is pre-work context selection from existing records.
+  `knowledge-capture.md` is post-work audit and optional recording output.
+- Research, Review, and Verify reports should either include a concrete
+  `<!-- KNOWLEDGE: ... -->` candidate marker or `knowledge: none - <specific reason>`.
 - Do not call queue mutation commands such as `sd claim`, `sd close`,
   dependency edits, label edits, or follow-up creation.
 - Preserve unrelated dirty worktree changes.

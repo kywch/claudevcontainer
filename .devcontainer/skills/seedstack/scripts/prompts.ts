@@ -42,8 +42,10 @@ Artifact paths (use exactly, do not invent names):
 - Research 1: ${researchPaths(seed, 1).report}
 - Research 2: ${researchPaths(seed, 2).report}
 - Knowledge scout: ${knowledgeScoutPaths(seed).report}
+- Knowledge capture: ${dispatchRoot(seed)}/knowledge-capture.md
 - Events dir: ${eventsDir(seed)}
 - For research 3+, continue the numeric pattern.
+- Knowledge scout is pre-work context from existing .seeds/knowledge.jsonl; knowledge capture is post-work audit/recording output at ${dispatchRoot(seed)}/knowledge-capture.md.
 - Done and escalate are mutually exclusive — use seq 001 for whichever applies. The gate decision may contain "close" for legacy validator compatibility; it does not mean queue close.
 - Write any unlisted dispatch-work artifacts under ${dispatchRoot(seed)}/.
 - Set decision to exactly one of: closed, blocked, escalated, crashed.
