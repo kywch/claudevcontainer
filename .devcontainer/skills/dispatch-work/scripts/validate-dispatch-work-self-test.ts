@@ -14,6 +14,41 @@ export function runSelfTest(pretty: boolean): number {
     makeFixtureRound(repo, seed, roundPath, "pass", "close", true);
     const valid = validateDispatch({ ...parseArgs([]), repo, seed });
 
+    const missingKnowledgeRepo = join(root, "missing-knowledge-repo");
+    makeFixtureRound(missingKnowledgeRepo, seed, join(missingKnowledgeRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    rmSync(join(missingKnowledgeRepo, "tmp/dispatch-work", seed, "knowledge-capture.md"), { force: true });
+    const missingKnowledge = validateDispatch({ ...parseArgs([]), repo: missingKnowledgeRepo, seed });
+
+    const shallowKnowledgeRepo = join(root, "shallow-knowledge-repo");
+    makeFixtureRound(shallowKnowledgeRepo, seed, join(shallowKnowledgeRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(join(shallowKnowledgeRepo, "tmp/dispatch-work", seed, "knowledge-capture.md"), "capture_state=none_qualified\naccepted IDs: []\n");
+    const shallowKnowledge = validateDispatch({ ...parseArgs([]), repo: shallowKnowledgeRepo, seed });
+
+    const recordedProseRepo = join(root, "recorded-prose-repo");
+    makeFixtureRound(recordedProseRepo, seed, join(recordedProseRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(join(recordedProseRepo, "tmp/dispatch-work", seed, "knowledge-capture.md"), "capture_state=recorded\nAccepted records: wrote one down in prose.\n");
+    const recordedProse = validateDispatch({ ...parseArgs([]), repo: recordedProseRepo, seed });
+
+    const recordedIdsRepo = join(root, "recorded-ids-repo");
+    makeFixtureRound(recordedIdsRepo, seed, join(recordedIdsRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(join(recordedIdsRepo, "tmp/dispatch-work", seed, "knowledge-capture.md"), "capture_state=recorded\naccepted IDs: [ex-1a2b3c]\n");
+    const recordedIds = validateDispatch({ ...parseArgs([]), repo: recordedIdsRepo, seed });
+
+    const recordedJsonRepo = join(root, "recorded-json-repo");
+    makeFixtureRound(recordedJsonRepo, seed, join(recordedJsonRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(recordedJsonRepo, "tmp/dispatch-work", seed, "knowledge-capture.md"),
+      [
+        "capture_state=recorded",
+        "accepted_records:",
+        "```json",
+        JSON.stringify({ accepted_records: [{ type: "reference", content: "Fixture source for capture validator." }] }),
+        "```",
+        "",
+      ].join("\n"),
+    );
+    const recordedJson = validateDispatch({ ...parseArgs([]), repo: recordedJsonRepo, seed });
+
     const missingSummaryRepo = join(root, "missing-summary-repo");
     makeFixtureRound(missingSummaryRepo, seed, join(missingSummaryRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
     writeFileSync(join(missingSummaryRepo, "tmp/dispatch-work", seed, "round-1/implement-a1-report.md"), "# Implement Report\n\nOutcome: done\n\nRecommendation: close\n");
@@ -599,6 +634,11 @@ export function runSelfTest(pretty: boolean): number {
 
     const tests = [
       { name: "valid fixture passes", pass: valid.ok, blockers: valid.blockers.length },
+      { name: "missing knowledge capture blocks close", pass: !missingKnowledge.ok && missingKnowledge.blockers.some((finding) => finding.code === "gate_done_knowledge_capture_invalid"), blockers: missingKnowledge.blockers.length },
+      { name: "shallow none qualified knowledge capture blocks close", pass: !shallowKnowledge.ok && shallowKnowledge.blockers.some((finding) => finding.message.includes("store_count missing")), blockers: shallowKnowledge.blockers.length },
+      { name: "recorded prose knowledge capture blocks close", pass: !recordedProse.ok && recordedProse.blockers.some((finding) => finding.message.includes("recorded capture requires")), blockers: recordedProse.blockers.length },
+      { name: "recorded accepted ID knowledge capture passes", pass: recordedIds.ok, blockers: recordedIds.blockers.length },
+      { name: "recorded JSON accepted records knowledge capture passes", pass: recordedJson.ok, blockers: recordedJson.blockers.length },
       { name: "missing report summary blocks", pass: !missingSummary.ok && missingSummary.blockers.some((finding) => finding.code === "missing_report_summary"), blockers: missingSummary.blockers.length },
       { name: "loop policy missing report summary softens", pass: missingSummaryLoop.ok && (missingSummaryLoop.soft_blockers ?? []).some((finding) => finding.code === "missing_report_summary"), blockers: missingSummaryLoop.blockers.length },
       { name: "summary keys without heading block", pass: !summaryKeysWithoutHeading.ok && summaryKeysWithoutHeading.blockers.some((finding) => finding.code === "missing_report_summary"), blockers: summaryKeysWithoutHeading.blockers.length },

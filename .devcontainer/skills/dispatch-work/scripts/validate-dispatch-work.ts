@@ -27,6 +27,7 @@ import {
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readDirtyStatusText } from "../../seedstack/scripts/snapshot-dirty-state.ts";
+import { validateKnowledgeCaptureFile } from "./knowledge-capture-validation.ts";
 
 export type { ReportRecord, ReportRole } from "./validate-dispatch-work-reports.ts";
 
@@ -1276,11 +1277,29 @@ function validateGate(
   if (statuses.some((status) => !status.clean)) {
     add("blocker", "gate_done_dirty_child", "gate done requires clean child status validation", gate.path);
   }
+  validateGateKnowledgeCapture(args, gate.path, add);
   const gateText = readFileSync(gate.path, "utf8");
   if (!/dirty guard|dirty paths|known dirty/i.test(gateText)) {
     add("warning", "gate_missing_dirty_guard_text", "gate done should record dirty guard result", gate.path);
   }
   validateGateDirtyGuard(args, gate.path, gateText, add);
+}
+
+function validateGateKnowledgeCapture(
+  args: Args,
+  gatePath: string,
+  add: (level: Level, code: string, message: string, path?: string) => void,
+) {
+  if (!args.seed) return;
+  const path = join(args.dispatchRoot, args.seed, BASENAMES.knowledgeCapture);
+  const result = validateKnowledgeCaptureFile(path);
+  if (result.ok) return;
+  add(
+    "blocker",
+    "gate_done_knowledge_capture_invalid",
+    `gate done requires valid knowledge-capture.md: ${result.errors.join("; ")}`,
+    existsSync(path) ? path : gatePath,
+  );
 }
 
 function validateGateDirtyGuard(

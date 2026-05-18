@@ -99,7 +99,23 @@ export function makeFixtureRound(
     "",
     "Known dirty paths: none.",
   ].join("\n"));
+  write(`${dispatchRel}/knowledge-capture.md`, richNoneQualifiedKnowledgeCapture());
   mkdirp(dispatchPath);
+}
+
+export function richNoneQualifiedKnowledgeCapture(): string {
+  return [
+    "capture_state=none_qualified",
+    "store_count: 0",
+    "merge_union: false",
+    "marker_count: 0",
+    "artifacts_reviewed: 4",
+    "candidate_count: 0",
+    "rejected_count: 0",
+    "accepted IDs: []",
+    "none_rationale: No durable cross-session knowledge candidates in fixture artifacts.",
+    "",
+  ].join("\n");
 }
 
 function reportFixture(
