@@ -164,6 +164,9 @@ Only create seeds when explicitly requested.
   <review_diff path="review-diff-r<round>.md" />
   <verify path="verify-r<round>.md" />
   <precreation_review path="review-precreation-a<agent>.md" />
+  <review_state path="review-state.json" contract="seedstack_plan_review_state.v1" />
+  <review_manifest path="review-manifest.jsonl" contract="seedstack_plan_review_manifest.v1" />
+  <review_mechanical path="review-mechanical-r<round>.json" contract="mechanical check output for current plan_content_hash or plan_revision" />
   <creation path="creation.md" />
   <created_map path="created-map.json" />
   <adoption_epoch path="adoption/epoch-<n>.json" />

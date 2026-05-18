@@ -94,7 +94,10 @@ Load references only when needed:
 ```text
 classify size
   -> write tmp/seedstack/<slug>/plan.md
-  -> review if project/program
+  -> record current plan_content_hash or plan_revision
+  -> run Plan-Review or Diff-Review as required for current hash/revision
+  -> update review-state.json and review-manifest.jsonl
+  -> require presentation_ready=true before presentation
   -> present plan with visible assumptions
   -> if explicitly requested: create work order records only through queue CLI
   -> otherwise stop; do not implement, dispatch, run, or edit target files
@@ -106,7 +109,7 @@ edit needs an explicit follow-on request after plan presentation.
 Load `references/planning-flow.md`, `references/seed-card-and-artifacts.md`,
 `references/verification-and-sizing.md`, `references/labels-and-edges.md`,
 `references/chunking-strategies.md`, and `references/quality-and-stuck.md`.
-Also load `references/plan-review.md` when planning a `project` or `program`.
+Also load `references/plan-review.md` before any plan presentation.
 
 ### Manage
 
@@ -274,7 +277,8 @@ agents must be fresh and targeted. Full rules: `references/plan-review.md`.
   carry the seed-card details `dispatch-work` needs for autonomous work, while
   labels and dependency edges remain stored through the work queue CLI.
 - Do not overwrite an existing `plan.md` without user confirmation.
-- Do not present a `project`/`program` plan without review artifacts.
+- Do not present any plan without current Plan-Review or Diff-Review evidence
+  for the active `plan_content_hash` or `plan_revision`.
 - Spawned prompts must use repo-native commands and active repo/parent command
   wrappers; they must not assume aliases or wrappers unavailable in their
   environment.
@@ -286,10 +290,11 @@ agents must be fresh and targeted. Full rules: `references/plan-review.md`.
 - Planner must not skip alignment for `project`/`program` without recording
   explicit assumptions.
 - Planner must write `plan.md` before spawning review agents.
-- Planner must not present a `project`/`program` plan without review artifacts
-  under `tmp/seedstack/<slug>/`.
-- Planner must not present a `project`/`program` plan if review or verify
-  artifacts were locally authored instead of written from subagent outputs.
+- Planner must not present any plan without current Plan-Review or Diff-Review
+  evidence under `tmp/seedstack/<slug>/` for the active `plan_content_hash` or
+  `plan_revision`.
+- Planner must not present any plan if review or verify artifacts were locally
+  authored instead of written from read-only subagent outputs.
 - Planner must not treat first presentation as final for `project`/`program`.
   User feedback gate required before plan is accepted.
 - Planner must not edit files outside the plan artifact tree in plan mode.

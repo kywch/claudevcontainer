@@ -4,8 +4,11 @@
 
 ```text
 Classify size
-  -> [single-fix/slice]: Draft -> Present final -> Create seed records only
-     (if explicitly requested), otherwise stop
+  -> [single-fix/slice]:
+      Draft plan
+      -> Plan-Review or Diff-Review for current plan hash/revision
+      -> Present reviewed final plan
+      -> Create seed records only if explicitly requested, otherwise stop
   -> [project/program]:
       Mini-alignment (outcome + hard constraints only)
       -> Research fanout
@@ -60,6 +63,10 @@ For `project` and `program`, present a draft after research with visible
 assumption callouts. `project` accepts one adjustment round; `program` accepts
 two. Every adjustment triggers scoped diff review; broad changes escalate to
 full review.
+
+For every ask size, presentation requires current Plan-Review or Diff-Review
+evidence for the active plan hash/revision. Small plans may skip the draft
+reaction gate, but they do not skip review evidence.
 
 ## Research Fanout
 

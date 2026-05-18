@@ -1,8 +1,15 @@
 # Plan Review
 
-For `project` and `program` plans, review the plan artifact independently
-before presenting. Full reviews use the 3-pass review-fix-verify loop.
-Diff reviews are scoped and use the narrower diff flow below.
+Every plan, regardless of size, requires independent review before any plan
+presentation. `single-fix`, `slice`, `project`, and `program` differ only by
+reviewer count and lens scope; none bypass the review gate. Full reviews use
+the 3-pass review-fix-verify loop. Diff reviews are scoped and use the
+narrower diff flow below.
+
+`Plan-Review`, `Diff-Review`, and `Verify` are skill/protocol gates. They are
+satisfied only by read-only subagent evidence tied to the current plan
+hash/revision. Planner-authored findings, local summaries without subagent
+provenance, stale artifacts, and empty placeholders do not satisfy these gates.
 
 ## Review-Fix-Verify Loop
 
@@ -38,8 +45,8 @@ Used for: initial draft review, pre-creation gate.
 
 | plan size | review agents | lenses |
 | --- | ---: | --- |
-| `single-fix` | 0 | — |
-| `slice` | 0-1 | skill compliance if edge count > 4 |
+| `single-fix` | 1 | skill compliance |
+| `slice` | 1 (+1 when triggered) | skill compliance; add source reality when edge count > 4 or source risk is material |
 | `project` | 2 | skill compliance, source reality; include chunking strategy and implementation boundary sketch when implementation, subsystem, or feature work is broad |
 | `program` | 3 | skill compliance, source reality, risk/scope; include chunking strategy and implementation boundary sketch when implementation, subsystem, or feature work is broad |
 
@@ -67,6 +74,45 @@ with at most two fix attempts and targeted verify. If still dirty after the
 fix cap, present the revision with residual risk or escalate to full review
 when the issue is broad/material. Diff review does not clear the dirty bit;
 only a full review-fix-verify loop can clear it.
+
+## Review State and Manifest
+
+Maintain `tmp/seedstack/<slug>/review-state.json` with contract
+`seedstack_plan_review_state.v1`. It records the current plan-review gate
+state and is the presentation readiness source of truth. Required fields:
+
+- `contract`: `seedstack_plan_review_state.v1`
+- `current_plan_path`: path to the plan artifact being reviewed
+- `plan_content_hash` or `plan_revision`: content hash or monotonic revision
+  for the current plan
+- `semantic_dirty`: whether plan semantics changed after the last satisfying
+  review evidence
+- `full_review_since_last_mutation`: whether a full review-fix-verify loop
+  completed cleanly after the latest semantic mutation
+- `presentation_ready`: whether the current plan hash/revision has fresh
+  Plan-Review or Diff-Review evidence, required Verify evidence, and recorded
+  residual risks
+- `mode`: `full`, `diff`, `precreation`, or `none`
+- `round`: current review round number
+- `latest_manifest_sequence`: latest append-only manifest sequence considered
+  by the state
+- `residual_risks`: unfixed findings accepted for presentation
+
+Append every review-related artifact to
+`tmp/seedstack/<slug>/review-manifest.jsonl` with contract
+`seedstack_plan_review_manifest.v1`. Manifest entries cover Plan-Review,
+Diff-Review, Verify, pre-creation review, and mechanical check artifacts. Each
+entry must include its sequence, artifact path, artifact kind, review round,
+current `plan_content_hash` or `plan_revision`, agent role/lens when applicable,
+status, and timestamp. The manifest is append-only. The latest pointer/sequence
+is copied into `review-state.json`; stale entries cannot satisfy readiness.
+
+Any plan hash/revision change after review sets `semantic_dirty=true`, clears
+`presentation_ready=false`, and requires fresh Diff-Review or full Plan-Review
+evidence before presentation. A full review-fix-verify loop that exits clean
+sets `full_review_since_last_mutation=true`; a diff review can make
+`presentation_ready=true` for the current revision but does not clear
+`semantic_dirty` or set `full_review_since_last_mutation=true`.
 
 ## Review Lenses
 
@@ -129,6 +175,12 @@ bun skills/seedstack/scripts/check-plan.ts tmp/seedstack/<slug>/plan.md --shared
 
 If scripted checks fail, fix before proceeding to phase 2.
 
+Capture the command output in a docs-owned artifact such as
+`tmp/seedstack/<slug>/review-mechanical-r<round>.json`, then append a
+`mechanical_check` entry to `review-manifest.jsonl` for the current
+`plan_content_hash` or `plan_revision`. Do not change `check-plan.ts` to own
+this protocol.
+
 ### Phase 2: Full Review-Fix-Verify Loop
 
 Standard full review with all lenses, plus agent-reviewed check:
@@ -171,6 +223,9 @@ After pre-creation review, re-present to user:
 - Planner-authored review or verify artifacts are invalid. If subagent use is
   unavailable, stop and report that the required review/verify gate cannot be
   satisfied; do not create placeholder artifacts.
+- Review, diff review, verify, pre-creation review, and mechanical check
+  artifacts must be represented by current-hash/revision entries in
+  `review-manifest.jsonl`; missing or stale manifest entries are invalid.
 - Each review/verify artifact must include or preserve subagent provenance
   (agent role/lens is enough) and the subagent's actual findings. Minimal
   formatting wrappers are allowed; substantive rewrites are not.
@@ -178,13 +233,19 @@ After pre-creation review, re-present to user:
 - Diff review artifacts written to `tmp/seedstack/<slug>/review-diff-r<round>.md`.
 - Verify artifacts written to `tmp/seedstack/<slug>/verify-r<round>.md`.
 - Pre-creation review artifacts written to `tmp/seedstack/<slug>/review-precreation-a<agent>.md`.
+- Mechanical check output written to `tmp/seedstack/<slug>/review-mechanical-r<round>.json`.
 - Verify review artifacts exist and are nonempty before proceeding.
 - Fix material findings before presenting. Report unfixed findings as
   residual risk in the plan artifact.
 
 ## Presentation Contract
 
-Do not present a `project` or `program` plan without review artifacts.
+Do not present any plan without current review evidence. Before plan
+presentation and again before seed creation, reject stale or missing evidence:
+`review-state.json` must reference the current plan hash/revision, point at the
+latest relevant `review-manifest.jsonl` sequence, and have
+`presentation_ready=true`. The manifest entries that satisfy readiness must be
+for the same current plan hash/revision; stale entries cannot be reused.
 
 ```xml
 <present_requires alignment="answered_or_assumed"
@@ -217,7 +278,8 @@ For `project` and `program`, first presentation is a draft:
 6. If rejected: new research round before revision (not a patch on the
    existing draft). Returns to draft plan step.
 
-For `single-fix` and `slice`, present final directly — no draft gate needed.
+For `single-fix` and `slice`, present the reviewed final plan directly after
+current review evidence exists — no draft reaction gate needed.
 
 Assumptions that the user does not challenge become accepted alignment.
 
