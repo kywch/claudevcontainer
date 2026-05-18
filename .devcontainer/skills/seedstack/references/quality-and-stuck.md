@@ -43,26 +43,11 @@ Before presenting, check:
   evidence belongs under `loop/`; recovery attempts belong under
   `recovery/rec-####/`.
 
-Before creation, deterministic checks must pass:
-
-- every `temp_id` is unique across the plan
-- every `blocked_by` reference points to an existing `temp_id`
-- creation order respects `blocked_by` (parents before dependents)
-- every seed card uses `priority: 1`; priority is not used to encode DAG order
-- shared network label present in every seed's labels array
-- no seed has empty acceptance or placeholder gate commands
-- required seed-card fields are present
-- dependency graph has no cycles or transitively redundant direct edges
-
-Agent-reviewed pre-creation check:
-
-- no grab-bag seeds (acceptance is independently testable per seed)
-- chunking strategy applied: behavior-first boundaries, source mapping done in
-  planning, discovery seeds exceptional, early smoke considered, conformance
-  used as verifier rather than first proof
-- implementation boundary sketch exists for broad implementation/subsystem
-  plans and seed cards align to those responsibility boundaries without
-  becoming pure file/module slices
+Before creation, use `plan-review.md` as the normative pre-creation gate:
+run the scripted mechanical check, record current manifest/state evidence, and
+apply the agent-reviewed safety gate only as described there. This file keeps
+the presentation quality bar and stuck-state resolutions; it does not duplicate
+pre-creation acceptance checklists.
 
 ## Stuck Index
 

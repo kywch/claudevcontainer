@@ -14,18 +14,14 @@
 
 ## Gates
 
-- **Quality gate (main review loop)**: Review-fix-verify loop that runs on
-  the initial draft. Catches issues early when they're cheap to fix. NOT
-  load-bearing for safety — removing it does not allow unreviewed creation
-  (safety gate catches the gap). Cap: 3 passes.
+- **Quality gate (main review loop)**: Plan-Review or Diff-Review evidence
+  for the current plan hash/revision before any plan presentation. Full
+  reviews use the review-fix-verify loop; diff reviews use the scoped flow in
+  `plan-review.md`.
 
-- **Safety gate (pre-creation gate)**: Full review-fix-verify loop that runs
-  as the final gate before CLI creates seeds. Load-bearing — removing it
-  allows unreviewed plans to reach creation (proven by Quint negative
-  control). Includes scripted mechanical checks + agent review. Accept/reject
-  only (no adjust). Cap: 3 passes. Dirty-bit skip can skip the agent review
-  phase when plan unchanged since last clean full review; scripted mechanical
-  checks always run before CLI creation.
+- **Safety gate (pre-creation gate)**: Final gate before CLI creates seeds.
+  `plan-review.md` owns the scripted mechanical check, review-state/manifest
+  freshness rules, dirty-bit skip, and accept/reject-only user gate.
 
 ## Review modes
 
@@ -62,22 +58,21 @@
   confirms all fixes landed, or review finds no issues. Does NOT clear on
   cap hit (unfixed findings remain). Diff review does not clear dirty bit.
 
-- **Full review since last mutation**: True after any full review-fix-verify
-  loop runs — including cap-hit with residual risk. A planner fix during
-  the review loop does not reset this flag (it is set when the loop exits,
-  not during). The core safety invariant: no creation without this flag set.
+- **Full review since last mutation**: True only after a full
+  review-fix-verify loop exits clean for the current plan hash/revision. A
+  diff review can make the current revision presentation-ready, but it does not
+  set this flag.
 
 - **Residual risk**: Unfixed findings that remain after the review-fix-verify
-  cap (3 passes) or fix sub-cap (2 attempts) is hit. Recorded in the plan
-  artifact with specific finding details. Creation with residual risk is
-  permitted because the full review has run — the dirty bit stays true as a
-  consequence, but `fullReviewSinceLastMutation` is set.
+  cap (3 passes) or fix sub-cap (2 attempts) is hit. Record specific finding
+  details in plan artifacts and review state; stale or unrecorded risk cannot
+  satisfy presentation readiness.
 
 ## User touchpoints
 
-- **Plan presentation**: Full plan presented after review loop. User can
-  accept (clean or dirty), adjust (triggers diff review), or reject (new
-  research round).
+- **Plan presentation**: Reviewed plan presentation backed by current
+  Plan-Review or Diff-Review evidence. User can accept, adjust (triggers diff
+  review), or reject (new research round).
 
 - **Pre-creation user gate**: Accept or reject only. No adjust — prevents
   unbounded loop. Reject routes back to plan presentation (user reacts).

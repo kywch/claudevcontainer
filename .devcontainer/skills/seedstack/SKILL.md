@@ -299,38 +299,15 @@ agents must be fresh and targeted. Full rules: `references/plan-review.md`.
   User feedback gate required before plan is accepted.
 - Planner must not edit files outside the plan artifact tree in plan mode.
 - Planner must not create work orders without explicit user request.
-- **Quint coverage**: `quint/plan_flow.qnt` is ground truth for
-  project/program plan -> create flow, dirty bit behavior, review caps,
-  adjustment caps, and pre-creation safety. It does not cover single-fix/slice,
-  manage/run loops, CLI mutation correctness, graph validity, artifact
-  nonemptiness, or dispatch close logic.
-- **No creation without review** (Quint-proven for project/program planning):
-  `CreateSeeds` requires `fullReviewSinceLastMutation=true`. Cap-hit residual
-  risk is allowed only after a full review ran and the risk was recorded. The
-  pre-creation agent review is load-bearing for review safety; scripted
-  mechanical checks always run before CLI creation.
-- **Dirty-bit semantics**: sets on user adjustments and planner revisions
-  after user feedback. Clears when a full review-fix-verify loop exits clean.
-  Does NOT clear on cap hit (unfixed findings = residual risk). Diff review
-  does not clear dirty bit.
-- **Residual risk allowed**: creation is permitted with dirty bit true if a
-  full review has run (cap hit with unfixed findings). Residual risk must be
-  recorded in the plan artifact.
-- Review-fix-verify loop: cap 3 passes per loop instance. Cap resets on each
-  new draft. Fix sub-cap: 2 attempts per pass.
-- Verify agents must be fresh, scope is targeted.
-- Diff review that finds 3+ material findings or damage outside the touched
-  seed set must escalate to full review.
-- Safety gate (pre-creation): accept or reject only (no adjust). Reject
-  routes to User reacts. Works regardless of "just go" mode. Assumption
-  check does not rerun at pre-creation.
-- Pre-creation mechanical checks (temp_id uniqueness, seed_slug presence,
-  priority equals 1, blocked_by validity, creation order, shared label, no
-  empty acceptance/gates) are scripted. Plan quality checks such as grab-bag
-  detection, chunking strategy fit, early-smoke expectations, discovery-seed
-  exceptionalism, and upfront-summary format require agent review.
-- Run pre-creation mechanical checks with:
-  `bun skills/seedstack/scripts/check-plan.ts tmp/seedstack/<slug>/plan.md --shared-label <label>`.
+- **Quint coverage**: `quint/plan_flow.qnt` covers the project/program
+  plan -> create safety model. `references/plan-review.md` is normative for
+  all-size review evidence, dirty state, manifests, verify freshness,
+  residual risk, and pre-creation gates.
+- **No creation without review**: before any seed creation, the current plan
+  must satisfy the review-state/manifest contract in `plan-review.md` and pass
+  the mechanical pre-creation check documented there.
+- Review-fix-verify loop, diff-review escalation, dirty-bit semantics, and
+  residual-risk handling are defined in `references/plan-review.md`.
 - Terminal outcomes are exclusive: plan is presented or escalated, never both.
 
 ## Management Invariants
