@@ -45,6 +45,7 @@ import { preflightRepo, type WorktreeMetadata, type WorktreePolicy } from "./wor
 import { writeDispatchRound } from "./fixtures/dispatch-artifacts.ts";
 import {
   KNOWLEDGE_RECORD_TYPES,
+  VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE,
   validateKnowledgeCaptureText,
 } from "../../dispatch-work/scripts/knowledge-capture-validation.ts";
 
@@ -3933,6 +3934,8 @@ async function selfTest(pretty: boolean): Promise<never> {
     ].join("\n"));
     mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-shallow"), { recursive: true });
     writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-shallow", "knowledge-capture.md"), "capture_state=none_qualified\naccepted IDs: []\n");
+    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-status-only"), { recursive: true });
+    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-status-only", "knowledge-capture.md"), "status: none_qualified\naccepted IDs: []\n");
     mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-invalid"), { recursive: true });
     writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-invalid", "knowledge-capture.md"), "\n");
     mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-recorded"), { recursive: true });
@@ -3962,6 +3965,14 @@ async function selfTest(pretty: boolean): Promise<never> {
     const shallowAudit = baseKnowledgeCaptureCheck("seed-shallow", "audit");
     assertSelfTest(!ok(shallowAudit) && stringField(shallowAudit.state) === "audit_invalid", "knowledge shallow audit rejected");
     assertSelfTest(knowledgeCaptureBlocksRequired(shallowAudit), "required shallow audit blocks");
+    const statusOnlyAudit = baseKnowledgeCaptureCheck("seed-status-only", "audit");
+    const statusOnlyAuditInfo = isObject(statusOnlyAudit.audit) ? statusOnlyAudit.audit : {};
+    assertSelfTest(!ok(statusOnlyAudit) && stringField(statusOnlyAudit.state) === "audit_invalid", "knowledge status-only none qualified rejected");
+    assertSelfTest(
+      Array.isArray(statusOnlyAuditInfo.errors) && statusOnlyAuditInfo.errors.includes("capture_state missing"),
+      "knowledge status-only none qualified reports capture_state missing",
+    );
+    assertSelfTest(knowledgeCaptureBlocksRequired(statusOnlyAudit), "required status-only none qualified blocks");
     const emptyAudit = baseKnowledgeCaptureCheck("seed-empty", "audit");
     assertSelfTest(ok(emptyAudit) && stringField(emptyAudit.state) === "none_qualified", "knowledge none qualified audit succeeds");
     assertSelfTest(!knowledgeCaptureBlocksRequired(emptyAudit), "required none qualified audit passes");
@@ -4003,6 +4014,13 @@ async function selfTest(pretty: boolean): Promise<never> {
   }
   await runChildTimeoutSelfTest(assertSelfTest);
   const dispatchPrompt = buildDispatchPrompt("/repo", "seed-test", "/result.json");
+  const noneQualifiedTemplate = dispatchPrompt.match(/Minimal valid none_qualified example:\n\n```text\n([\s\S]*?)\n```/)?.[1] ?? "";
+  const promptTemplateValidation = validateKnowledgeCaptureText(noneQualifiedTemplate);
+  assertSelfTest(promptTemplateValidation.ok, "dispatch prompt none qualified template validates", promptTemplateValidation.errors);
+  assertSelfTest(
+    noneQualifiedTemplate.trim() === VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE.trim(),
+    "dispatch prompt embeds shared none qualified template",
+  );
   assertSelfTest(dispatchPrompt.includes("outer supervised exec (Codex or Claude Code CLI) managed by seedstack"), "dispatch prompt explains outer supervision");
   assertSelfTest(dispatchPrompt.includes("native agent-spawn tool (spawn_agent for Codex, Agent tool for Claude Code) only if it returns a real child id"), "dispatch prompt requires real spawn_agent id");
   assertSelfTest(dispatchPrompt.includes("Never fabricate liveness handles"), "dispatch prompt forbids fabricated liveness");

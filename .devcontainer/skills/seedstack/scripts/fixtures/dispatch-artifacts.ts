@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { roundDir, gatePath } from "../../../dispatch-work/scripts/dispatch-work-paths.ts";
+import { VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE } from "../../../dispatch-work/scripts/knowledge-capture-validation.ts";
 
 type ReportRole = "execute" | "implement" | "review" | "verify";
 
@@ -85,17 +86,7 @@ function write(repo: string, repoRel: string, content: string): void {
 }
 
 function richNoneQualifiedKnowledgeCapture(): string {
-  return [
-    "capture_state=none_qualified",
-    "store_count: 0",
-    "merge_union: true",
-    "marker_count: 0",
-    "artifacts_reviewed: 4",
-    "candidate_count: 0",
-    "rejected_count: 0",
-    "none_rationale: No durable cross-session knowledge candidates in fixture artifacts.",
-    "",
-  ].join("\n");
+  return VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE;
 }
 
 function report(
