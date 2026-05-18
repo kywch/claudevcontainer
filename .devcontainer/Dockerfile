@@ -98,6 +98,9 @@ ENV PATH=$PATH:/usr/local/share/npm-global/bin:/home/agent/.local/bin:/home/agen
 ENV SHELL=/bin/zsh
 ENV EDITOR=nano
 ENV VISUAL=nano
+# Redirect Docker config away from ~/.docker so DevPod's credential
+# injection into ~/.docker/config.json is harmless.
+ENV DOCKER_CONFIG=/home/agent/.docker-clean
 # Opt out of rtk telemetry (anonymous but on-by-default upstream)
 ENV RTK_TELEMETRY_DISABLED=1
 

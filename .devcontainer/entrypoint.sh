@@ -157,44 +157,30 @@ import_ssh_dir() {
 
 import_ssh_dir /mnt/host-ssh "$AGENT_HOME/.ssh"
 
-# 4. DevPod may inject "credsStore": "devpod" into ~/.docker/config.json so
-#    workspace Docker commands reuse host credentials. That is convenient for
-#    pulls, but it can shadow `docker login` inside the container and break
-#    Docker Hub pushes when the forwarded credential is stale or empty. Remove
-#    only DevPod helper references; preserve ordinary auths and other Docker
-#    config so in-container login remains the source of truth.
-remove_devpod_docker_creds() {
-  local config_file="$1"
-  local tmp_config
-  [ -f "$config_file" ] || return 0
-  command -v jq >/dev/null 2>&1 || return 0
-
-  tmp_config="$(mktemp)"
-  if jq '
-    if .credsStore == "devpod" then del(.credsStore) else . end
-    | if (.credHelpers? | type) == "object" then
-        .credHelpers |= with_entries(select(.value != "devpod"))
-      else
-        .
-      end
-    | if ((.credHelpers? | type) == "object" and (.credHelpers | length) == 0) then
-        del(.credHelpers)
-      else
-        .
-      end
-  ' "$config_file" > "$tmp_config"; then
-    if sudo cp -f "$tmp_config" "$config_file" 2>/dev/null || cp -f "$tmp_config" "$config_file"; then
-      sudo chmod 600 "$config_file" 2>/dev/null || chmod 600 "$config_file" 2>/dev/null || true
-    fi
-    sudo chown agent:agent "$config_file" 2>/dev/null || true
+# 4. Docker config isolation from DevPod credential injection.
+#    DOCKER_CONFIG points to ~/.docker-clean (set in Dockerfile ENV).
+#    DevPod rewrites ~/.docker/config.json on attach/reconnect — we don't
+#    care because Docker reads from $DOCKER_CONFIG instead. Seed the clean
+#    config dir on first boot; migrate any existing auths from ~/.docker.
+docker_clean="${DOCKER_CONFIG:-$AGENT_HOME/.docker-clean}"
+mkdir -p "$docker_clean"
+if [ ! -f "$docker_clean/config.json" ]; then
+  if [ -f "$AGENT_HOME/.docker/config.json" ] && command -v jq >/dev/null 2>&1; then
+    # Copy existing config but strip DevPod helpers
+    jq '
+      if .credsStore == "devpod" then del(.credsStore) else . end
+      | if (.credHelpers? | type) == "object" then
+          .credHelpers |= with_entries(select(.value != "devpod"))
+        else . end
+      | if ((.credHelpers? | type) == "object" and (.credHelpers | length) == 0) then
+          del(.credHelpers)
+        else . end
+    ' "$AGENT_HOME/.docker/config.json" > "$docker_clean/config.json" 2>/dev/null \
+      || echo '{}' > "$docker_clean/config.json"
+  else
+    echo '{}' > "$docker_clean/config.json"
   fi
-  rm -f "$tmp_config"
-}
-
-docker_config_dir="${DOCKER_CONFIG:-$AGENT_HOME/.docker}"
-remove_devpod_docker_creds "$docker_config_dir/config.json"
-if [ "$docker_config_dir" != "$AGENT_HOME/.docker" ]; then
-  remove_devpod_docker_creds "$AGENT_HOME/.docker/config.json"
+  chmod 600 "$docker_clean/config.json"
 fi
 
 # 5. Align docker group GID with host's /var/run/docker.sock (varies per host).
