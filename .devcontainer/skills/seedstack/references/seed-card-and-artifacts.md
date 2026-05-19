@@ -11,6 +11,7 @@ title: concise imperative
 labels: [net-slug, impl, storage]
 priority: 1
 blocked_by: [N0]
+parallel_ok: false
 area: spec/io | impl/ts | storage | docs | ...
 source_refs:
   - path:line or file
@@ -32,9 +33,15 @@ dispatch_notes:
 
 `priority` is an urgency class, not an execution-order field. Planned seed
 cards must use `priority: 1`. Use `blocked_by` dependencies and the dependency
-graph to express execution constraints. Creation order is only topological
-record creation order. Do not encode DAG order by assigning staggered
-priorities.
+graph to express execution constraints. For current single-worker runs,
+creation order is the default dependency spine unless a seed is explicitly
+parallel-safe or belongs to an explicitly documented independent branch; do not
+rely on priority, record creation timestamps, or generated ids for ordering.
+
+Use `parallel_ok: true` only when a seed may run before the immediately
+preceding seed in creation order without missing acceptance evidence,
+verification proof, or source-precedence decisions. Otherwise omit it or set
+`false`.
 
 ## Plan Artifact
 
@@ -233,12 +240,20 @@ No SeedSpec mutation may happen during adoption scan.
 
 Write `adoption-selection.json` after user choice:
 
-1. Adopted work order ids and selected label/filter.
+1. Adopted work order ids and selected label/filter. Preserve manifest
+   execution order in `adopted_seed_ids`, or provide `planned_order` entries
+   with `rank`/`order`; readiness filters this order rather than replacing it
+   with raw CLI ready order.
 2. Excluded open ids and reason.
 3. Baseline open/ready/blocked/active/assigned counts.
 4. Baseline manager-created follow-up count.
 5. Timestamp and user decision summary.
 6. Adoption epoch id and active manifest pointer.
+
+The `adopted_seed_ids` order is the run tie-break order for ready adopted
+seeds. It should follow the planned dependency/order spine. Readiness still
+comes from the queue dependency graph; the manifest order only chooses among
+multiple currently-ready adopted seeds.
 
 ## Run Artifact
 

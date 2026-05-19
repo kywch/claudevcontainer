@@ -74,6 +74,7 @@ const DEFAULT_SCENARIOS = [
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "unsafe-continue-after-nonclosed.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "per-seed-commit.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "per-seed-two-seeds.json"),
+  join(SEEDSTACK_DIR, "test", "loop-scenarios", "ready-selection-manifest-order.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "stop-after-seed.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "stop-after-seed-idle-start.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "preexisting-queue-dirty-before-auto-run.json"),

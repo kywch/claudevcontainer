@@ -569,7 +569,10 @@ active manifest from that filter before dispatching. When no explicit stack
 filter or label exists, ask once before mutating or dispatching. After adoption
 is fixed, run `skills/seedstack/scripts/check-adoption-selection.ts --adoption-selection <active-manifest.json> --scan-file <scan.json> --pretty`
 before dispatch selection. Auto run may select only from `explicit_candidate_ids` in the
-`adoption_selection_check.v1` result.
+`adoption_selection_check.v1` result. The checker orders ready adopted
+candidates by active manifest order: `planned_order` rank/order first when
+present, otherwise `adopted_seed_ids` order. Raw CLI ready order is only a
+readiness input.
 
 When the adopted set/filter changes, create a new adoption epoch. Preserve
 prior manifests and record the active epoch in `run-state.json`; legacy
@@ -582,10 +585,11 @@ Selection is constrained:
    adoption manifest.
 2. Never use a generic next-work selector after adoption; dispatch receives the
    chosen explicit id.
-3. Prefer lower numeric priority, then older `createdAt`, then lexicographic
-   id. The LLM may override this tie-breaker only for a recorded local reason
-   such as batching same-file work, avoiding an unexpected dirty path, or
-   choosing a review/hardening seed after all implementation blockers closed.
+3. Prefer the first ready adopted seed in active manifest order/rank. Use
+   `planned_order` rank/order when present, otherwise `adopted_seed_ids` order.
+   That order should follow the planned dependency spine. Skipped seeds are
+   ignored. Do not use raw CLI ready order, numeric priority, `createdAt`, or
+   generated id hashes as scheduling signals.
 4. Record candidate ids, chosen id, and selection rationale in
    `run-state.json`; refresh `run.md`.
 5. If no adopted candidate is ready, stop and classify the state instead of

@@ -87,7 +87,7 @@ function extractCards(text: string): Card[] {
   const cards: Card[] = [];
   const fencePattern = /^[ \t]*```ya?ml[^\r\n]*\r?\n([\s\S]*?)^[ \t]*```/gim;
   const seedCardKeyPattern =
-    /^\s*(temp_id|seed_slug|title|labels|priority|blocked_by|area|source_refs|acceptance|gates|verification_owner|target_gates|estimated_loc|dispatch_notes):/m;
+    /^\s*(temp_id|seed_slug|title|labels|priority|blocked_by|parallel_ok|area|source_refs|acceptance|gates|verification_owner|target_gates|estimated_loc|dispatch_notes):/m;
   for (const match of text.matchAll(fencePattern)) {
     const block = dedent(match[1]);
     if (!seedCardKeyPattern.test(block)) {
@@ -268,6 +268,9 @@ for (const card of cards) {
   const tempId = String(card.temp_id ?? "").trim();
   const labels = asStringArray(card.labels);
   const blockedBy = asStringArray(card.blocked_by);
+  const index = indexById.get(tempId) ?? 0;
+  const previousTempId = index > 0 ? ids[index - 1] : undefined;
+  const parallelOk = String(card.parallel_ok ?? "").trim().toLowerCase() === "true";
 
   for (const field of ["seed_slug", "title", "area", "estimated_loc"]) {
     const value = card[field];
@@ -314,6 +317,9 @@ for (const card of cards) {
     errors.push(`${tempId}: blocked_by must be list`);
   } else {
     depsById.set(tempId, blockedBy);
+    if (previousTempId && !parallelOk && !blockedBy.includes(previousTempId)) {
+      errors.push(`${tempId}: default serial spine requires blocked_by ${previousTempId} or parallel_ok: true`);
+    }
     for (const dep of blockedBy) {
       if (placeholderText(dep)) {
         errors.push(`${tempId}: placeholder blocked_by ${dep}`);

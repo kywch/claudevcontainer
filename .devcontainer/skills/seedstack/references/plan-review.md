@@ -162,6 +162,9 @@ review. These checks are automated, not agent-reviewed:
 - every `blocked_by` reference points to an existing `temp_id`
 - creation order respects `blocked_by` (parents before dependents)
 - every seed card uses `priority: 1`; priority is not used to encode DAG order
+- for single-worker/default runs, creation order is encoded as a serial
+  dependency spine unless a card is explicitly marked `parallel_ok: true` with
+  a rationale
 - shared network label present in every seed's labels array
 - no empty acceptance or placeholder gate commands
 - required seed-card fields are present

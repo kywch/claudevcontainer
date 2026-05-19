@@ -30,6 +30,7 @@ type Result = {
   adoption: {
     path: string | null;
     adopted_seed_ids: string[];
+    planned_order: string[];
     excluded_open_seed_ids: string[];
     baseline_ready_ids: string[];
     baseline_blocked_ids: string[];
@@ -197,6 +198,19 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];
 }
 
+function orderByManifest(ids: string[], manifestOrder: string[]): string[] {
+  const order = new Map<string, number>();
+  manifestOrder.forEach((id, index) => {
+    if (!order.has(id)) order.set(id, index);
+  });
+  return [...ids].sort((left, right) => {
+    const leftRank = order.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightRank = order.get(right) ?? Number.MAX_SAFE_INTEGER;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    return left.localeCompare(right);
+  });
+}
+
 function intersection(left: string[], right: string[]): string[] {
   const rightSet = new Set(right);
   return left.filter((value) => rightSet.has(value));
@@ -211,6 +225,25 @@ function exactSetMismatch(actual: string[], expected: string[]): null | { missin
   const missing = difference(expected, actual);
   const extra = difference(actual, expected);
   return missing.length || extra.length ? { missing, extra } : null;
+}
+
+function orderedSeedIdsFromManifestField(value: unknown): string[] | null {
+  if (value === undefined) return null;
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) return value;
+  if (!Array.isArray(value)) return null;
+  const entries: Array<{ id: string; rank: number; index: number }> = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
+    if (!isObject(item)) return null;
+    const id = stringField(item.id) ?? stringField(item.seed_id) ?? stringField(item.seed);
+    if (!id) return null;
+    const rawRank = item.rank ?? item.order ?? item.planned_order;
+    const rank = typeof rawRank === "number" && Number.isFinite(rawRank) ? rawRank : Number.MAX_SAFE_INTEGER;
+    entries.push({ id, rank, index });
+  }
+  return entries
+    .sort((left, right) => (left.rank - right.rank) || (left.index - right.index))
+    .map((entry) => entry.id);
 }
 
 function addBlocker(blockers: Finding[], code: string, message: string, detail?: unknown): void {
@@ -254,6 +287,7 @@ function normalizeScan(
   raw: unknown,
   adopted: string[],
   excluded: string[],
+  manifestOrder: string[],
   path: string,
   blockers: Finding[],
 ): Result["scan"] {
@@ -274,7 +308,7 @@ function normalizeScan(
   const adoptedReadyDupes = duplicateValues(rawAdoptedReady);
   const excludedReadyDupes = duplicateValues(rawExcludedReady);
   const adoptedBlockedDupes = duplicateValues(rawAdoptedBlocked);
-  const adoptedReady = uniqueStrings(rawAdoptedReady);
+  const adoptedReady = orderByManifest(uniqueStrings(rawAdoptedReady), manifestOrder);
   const excludedReady = uniqueStrings(rawExcludedReady);
   const adoptedBlocked = uniqueStrings(rawAdoptedBlocked);
 
@@ -335,6 +369,7 @@ function check(options: Options): Result {
   }
 
   const adopted = adoptionObject ? stringArray(adoptionObject.adopted_seed_ids) : null;
+  const plannedOrder = adoptionObject ? orderedSeedIdsFromManifestField(adoptionObject.planned_order) : null;
   const excluded = adoptionObject ? stringArray(adoptionObject.excluded_open_seed_ids) : null;
   const baselineReady = adoptionObject ? stringArray(adoptionObject.baseline_ready_ids) ?? [] : [];
   const baselineBlocked = adoptionObject ? stringArray(adoptionObject.baseline_blocked_ids) ?? [] : [];
@@ -343,6 +378,9 @@ function check(options: Options): Result {
   const commitPolicy = stringField(adoptionObject?.commit_policy);
 
   if (adoptionObject && !adopted) addBlocker(blockers, "invalid_adopted_seed_ids", "adopted_seed_ids must be a string array");
+  if (adoptionObject && adoptionObject.planned_order !== undefined && !plannedOrder) {
+    addBlocker(blockers, "invalid_planned_order", "planned_order must be string array or array of {id|seed_id|seed, rank?}");
+  }
   if (adoptionObject && adopted && adopted.length === 0) {
     addBlocker(blockers, "empty_adopted_seed_ids", "adopted_seed_ids must be nonempty");
   }
@@ -351,6 +389,7 @@ function check(options: Options): Result {
   }
 
   const adoptedIds = adopted ?? [];
+  const manifestOrder = plannedOrder?.length ? plannedOrder : adoptedIds;
   const excludedIds = excluded ?? [];
   const adoptedDupes = duplicateValues(adoptedIds);
   const excludedDupes = duplicateValues(excludedIds);
@@ -360,6 +399,8 @@ function check(options: Options): Result {
   const baselineOverlap = intersection(baselineReady, baselineBlocked);
   const baselineReadyOutside = difference(baselineReady, adoptedIds);
   const baselineBlockedOutside = difference(baselineBlocked, adoptedIds);
+  const plannedOrderDupes = duplicateValues(plannedOrder ?? []);
+  const plannedOrderOutside = difference(plannedOrder ?? [], adoptedIds);
 
   if (adoptedDupes.length) addBlocker(blockers, "duplicate_adopted_seed_ids", "adopted_seed_ids contains duplicates", adoptedDupes);
   if (excludedDupes.length) addBlocker(blockers, "duplicate_excluded_open_seed_ids", "excluded_open_seed_ids contains duplicates", excludedDupes);
@@ -373,6 +414,8 @@ function check(options: Options): Result {
   if (baselineBlockedOutside.length) {
     addBlocker(blockers, "baseline_blocked_outside_adopted", "baseline_blocked_ids must be subset of adopted ids", baselineBlockedOutside);
   }
+  if (plannedOrderDupes.length) addBlocker(blockers, "duplicate_planned_order_ids", "planned_order contains duplicates", plannedOrderDupes);
+  if (plannedOrderOutside.length) addBlocker(blockers, "planned_order_outside_adopted", "planned_order must be subset of adopted ids", plannedOrderOutside);
 
   if (options.expectedAdopted.length) {
     const mismatch = exactSetMismatch(adoptedIds, options.expectedAdopted);
@@ -409,29 +452,29 @@ function check(options: Options): Result {
       addBlocker(blockers, "missing_scan_file", "scan file does not exist", scanPath);
     } else {
       try {
-        scan = normalizeScan(readJson(scanPath), adoptedIds, excludedIds, scanPath, blockers);
+        scan = normalizeScan(readJson(scanPath), adoptedIds, excludedIds, manifestOrder, scanPath, blockers);
       } catch (error) {
         addBlocker(blockers, "invalid_scan_file_json", "scan file is not valid JSON", String(error));
       }
     }
   }
 
+  const explicitCandidateIds = scan ? orderByManifest(scan.adopted_ready_ids, manifestOrder) : [];
   if (options.expectedFirstReady) {
     if (!scan) {
       addBlocker(blockers, "expected_first_ready_without_scan", "--expected-first-ready requires --scan-file");
-    } else if (!scan.adopted_ready_ids.length) {
+    } else if (!explicitCandidateIds.length) {
       addBlocker(blockers, "expected_first_ready_no_adopted_ready", "scan has no adopted ready ids", {
         expected: options.expectedFirstReady,
       });
-    } else if (scan.adopted_ready_ids[0] !== options.expectedFirstReady) {
+    } else if (explicitCandidateIds[0] !== options.expectedFirstReady) {
       addBlocker(blockers, "expected_first_ready_mismatch", "first adopted ready id does not match expected", {
         expected: options.expectedFirstReady,
-        actual: scan.adopted_ready_ids[0],
+        actual: explicitCandidateIds[0],
       });
     }
   }
 
-  const explicitCandidateIds = scan?.adopted_ready_ids ?? [];
   return {
     contract: "adoption_selection_check.v1",
     ok: blockers.length === 0,
@@ -440,6 +483,7 @@ function check(options: Options): Result {
     adoption: {
       path: adoptionPath,
       adopted_seed_ids: adoptedIds,
+      planned_order: plannedOrder ?? [],
       excluded_open_seed_ids: excludedIds,
       baseline_ready_ids: baselineReady,
       baseline_blocked_ids: baselineBlocked,
@@ -490,12 +534,20 @@ function selfTest(pretty: boolean): Result {
     const scanArray = join(dir, "scan-array.json");
     const scanDupes = join(dir, "scan-dupes.json");
     const adoptionNoExcluded = join(dir, "adoption-no-excluded.json");
+    const scanReversedReady = join(dir, "scan-reversed-ready.json");
+    const plannedOrderAdoption = join(dir, "planned-order.json");
     writeJson(adoption, valid);
     writeJson(adoptionNoExcluded, { ...valid, excluded_open_seed_ids: [] });
+    writeJson(plannedOrderAdoption, {
+      ...valid,
+      adopted_seed_ids: ["seed-a", "seed-b"],
+      planned_order: [{ id: "seed-b", rank: 1 }, { id: "seed-a", rank: 2 }],
+    });
     writeJson(duplicate, { ...valid, adopted_seed_ids: ["seed-a", "seed-a", "seed-x"] });
     writeJson(scanPass, { adopted_ready_ids: ["seed-a"], excluded_ready_ids: ["seed-x"], adopted_blocked_ids: ["seed-b"] });
     writeJson(scanFail, { adopted_ready_ids: ["seed-b"], adopted_blocked_ids: ["seed-b"] });
     writeJson(scanReadyOnly, { ready_ids: ["seed-a", "seed-x", "seed-z"], blocked_ids: ["seed-b"] });
+    writeJson(scanReversedReady, { adopted_ready_ids: ["seed-b", "seed-a"] });
     writeJson(scanArray, ["seed-a", "seed-x"]);
     writeJson(scanDupes, {
       adopted_ready_ids: ["seed-a", "seed-a"],
@@ -559,6 +611,34 @@ function selfTest(pretty: boolean): Result {
       selfTest: false,
     });
     assertSelf("scan ready filtered from ready_ids", filtered.ok && filtered.explicit_candidate_ids.join(",") === "seed-a", filtered);
+    const manifestOrdered = check({
+      repo: dir,
+      adoptionSelection: adoption,
+      scanFile: scanReversedReady,
+      expectedAdopted: [],
+      expectedExcluded: [],
+      pretty,
+      selfTest: false,
+    });
+    assertSelf(
+      "explicit candidates use adoption manifest order over scan order",
+      manifestOrdered.ok && manifestOrdered.explicit_candidate_ids.join(",") === "seed-a,seed-b",
+      manifestOrdered,
+    );
+    const plannedOrdered = check({
+      repo: dir,
+      adoptionSelection: plannedOrderAdoption,
+      scanFile: scanReversedReady,
+      expectedAdopted: [],
+      expectedExcluded: [],
+      pretty,
+      selfTest: false,
+    });
+    assertSelf(
+      "planned_order rank beats adopted order",
+      plannedOrdered.ok && plannedOrdered.explicit_candidate_ids.join(",") === "seed-b,seed-a",
+      plannedOrdered,
+    );
     const arrayScan = check({
       repo: dir,
       adoptionSelection: adoption,
@@ -621,6 +701,7 @@ function selfTest(pretty: boolean): Result {
       adoption: {
         path: adoption,
         adopted_seed_ids: valid.adopted_seed_ids,
+        planned_order: [],
         excluded_open_seed_ids: valid.excluded_open_seed_ids,
         baseline_ready_ids: valid.baseline_ready_ids,
         baseline_blocked_ids: valid.baseline_blocked_ids,
@@ -631,7 +712,7 @@ function selfTest(pretty: boolean): Result {
       },
       scan: null,
       explicit_candidate_ids: [],
-      summary: { self_tests: 10 },
+      summary: { self_tests: 11 },
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -656,6 +737,7 @@ try {
     adoption: {
       path: null,
       adopted_seed_ids: [],
+      planned_order: [],
       excluded_open_seed_ids: [],
       baseline_ready_ids: [],
       baseline_blocked_ids: [],

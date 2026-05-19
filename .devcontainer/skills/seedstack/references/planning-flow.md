@@ -87,8 +87,11 @@ wrappers; do not assume aliases or wrappers unavailable in their environment.
   implementation boundary, local tests, docs, release.
 - For protocol work, separate `draft`, `hardening`, `promotion`, and `release`
   unless the user explicitly asks for one combined seed.
-- Add dependency edges by source precedence first, runtime dependency second,
-  convenience last. No redundant transitive edges.
+- Add dependency edges by source precedence first and runtime dependency
+  second. For current single-worker runs, serial creation-order deps are the
+  default execution spine: N1 blocks N2, N2 blocks N3, and so on unless the
+  plan marks cards `parallel_ok: true` or explicitly calls out an independent
+  branch, then explains why early execution cannot miss required evidence.
 - In plan cards, use `blocked_by`. If the persisted CLI/API schema exposes
   `blockedBy`, treat it as the same dependency relation at the boundary.
 - `priority` is an urgency class, not execution order. Use `priority: 1` for
