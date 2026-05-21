@@ -523,7 +523,7 @@ function validateTypedRootScope(
   roundFiles: string[],
   add: (level: Level, code: string, message: string, path?: string) => void,
 ) {
-  const areas = seed ? seedAreas(args.repo, seed) : [];
+  const allowedRoots = seed ? allowedSeedEditRoots(args.repo, seed) : [];
   const topLevelDispatchFiles = existsSync(dispatchPath)
     ? readdirSync(dispatchPath, { withFileTypes: true })
       .filter((entry) => entry.isFile() && /\.(md|txt)$/.test(entry.name))
@@ -538,14 +538,14 @@ function validateTypedRootScope(
   for (const file of files) {
     const raw = readSmallArtifact(file, statSync(file).size);
     if (!raw) continue;
-    if (areas.length === 0) continue;
+    if (allowedRoots.length === 0) continue;
     for (const root of scopedRepoEditRoots(raw)) {
       if (isDispatchArtifactRoot(args.repo, dispatchPath, root)) continue;
-      if (matchesAnyScopedAreaRoot(root, areas)) continue;
+      if (matchesAnyScopedAllowedRoot(root, allowedRoots)) continue;
       add(
         "blocker",
         "artifact_impl_root_mismatch",
-        `artifact repo_edit_roots includes ${root}, but seed areas are ${areas.join(", ")}`,
+        `artifact repo_edit_roots includes ${root}, but allowed seed edit roots are ${allowedRoots.join(", ")}`,
         file,
       );
     }
@@ -559,7 +559,7 @@ function isDispatchArtifactRoot(repo: string, dispatchPath: string, root: string
   return normalizedRoot === dispatchRoot || normalizedRoot.startsWith(`${dispatchRoot}/`);
 }
 
-function seedAreas(repo: string, seed: string): string[] {
+function allowedSeedEditRoots(repo: string, seed: string): string[] {
   const issuesPath = join(repo, ".seeds", "issues.jsonl");
   if (!existsSync(issuesPath)) return [];
   for (const line of readFileSync(issuesPath, "utf8").split(/\r?\n/)) {
@@ -572,13 +572,17 @@ function seedAreas(repo: string, seed: string): string[] {
     }
     if (record.id !== seed) continue;
     const description = stringValue(record.description);
-    return description ? parseAreas(description) : [];
+    return description ? parseAllowedSeedEditRoots(description) : [];
   }
   return [];
 }
 
-function parseAreas(description: string): string[] {
-  const match = /^\s*area:\s*(.+?)\s*$/m.exec(description);
+function parseAllowedSeedEditRoots(description: string): string[] {
+  return [...new Set([...parseAreaField(description, "area"), ...parseAreaField(description, "support_area")])];
+}
+
+function parseAreaField(description: string, field: "area" | "support_area"): string[] {
+  const match = new RegExp(`^\\s*${field}:\\s*(.+?)\\s*$`, "m").exec(description);
   if (!match) return [];
   return match[1]
     .split(/[+;,|]/)
@@ -678,16 +682,16 @@ function isNonImplementationRoot(root: string): boolean {
   );
 }
 
-function matchesAnyImplementationAreaRoot(root: string, areas: string[]): boolean {
-  return areas.some((area) =>
+function matchesAnyImplementationAreaRoot(root: string, allowedRoots: string[]): boolean {
+  return allowedRoots.some((area) =>
     sameAreaRoot(root, area) ||
     sameAreaRoot(area, root) ||
     areaAliases(area).some((alias) => sameAreaRoot(root, alias) || sameAreaRoot(alias, root)),
   );
 }
 
-function matchesAnyScopedAreaRoot(root: string, areas: string[]): boolean {
-  return areas.some((area) =>
+function matchesAnyScopedAllowedRoot(root: string, allowedRoots: string[]): boolean {
+  return allowedRoots.some((area) =>
     sameAreaRoot(root, area) ||
     areaAliases(area).some((alias) => sameAreaRoot(root, alias)),
   );

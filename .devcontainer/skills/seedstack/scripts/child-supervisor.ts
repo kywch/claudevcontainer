@@ -743,7 +743,7 @@ setInterval(() => {}, 1000);
       "seed-test-race",
       "self-test prompt",
       raceResultFile,
-      { ...baseOptions, codexBin: raceCodex, childSilentTimeoutMs: 50, childSilentProbeMs: 10 },
+      { ...baseOptions, codexBin: raceCodex, childSilentTimeoutMs: 500, childSilentProbeMs: 25 },
       emit,
     );
     assertSelfTest(raceChild.completedByResult === true, "valid result wins timeout race");

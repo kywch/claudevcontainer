@@ -65,6 +65,9 @@ Research, Execute, Review, and Verify children use `child_writes="report_only"`:
 they may write only their assigned dispatch report under artifact roots.
 Implement reports are still dispatch artifacts, but Implement may also edit
 files only under `repo_edit_roots` and only for assigned task scope.
+For Seedstack work orders, `repo_edit_roots` is the union of behavior `area`
+and optional `support_area`; `support_area` is limited to gate, harness,
+wrapper, or report wiring and does not widen behavior ownership.
 Root lists may be whitespace- or semicolon-separated and are normalized before
 validation. `tmp/dispatch-work/**`, `tmp/seedstack/**`, and `.seeds/**` are
 artifact/queue roots, never implementation roots. Legacy prompts may still use

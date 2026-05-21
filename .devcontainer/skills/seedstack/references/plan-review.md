@@ -168,6 +168,8 @@ review. These checks are automated, not agent-reviewed:
 - shared network label present in every seed's labels array
 - no empty acceptance or placeholder gate commands
 - required seed-card fields are present
+- optional `support_area` roots are valid, distinct from `area`, and referenced
+  by gate or target-gate proof rather than used as behavior ownership
 - no cycles or transitively redundant direct edges
 
 Command:

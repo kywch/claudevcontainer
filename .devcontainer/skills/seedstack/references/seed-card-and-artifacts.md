@@ -13,6 +13,7 @@ priority: 1
 blocked_by: [N0]
 parallel_ok: false
 area: spec/io | impl/ts | storage | docs | ...
+support_area: tests/harness | scripts/wrappers | docs/reports | ... # optional
 source_refs:
   - path:line or file
 acceptance:
@@ -28,6 +29,11 @@ estimated_loc: 200-400
 dispatch_notes:
   - read first, hard rules, likely files, risk
 ```
+
+`area` is the behavior ownership boundary for the seed. `support_area` is
+optional and distinct: use it only for gate, harness, wrapper, or report wiring
+paths needed to prove the current seed. Do not put product behavior ownership,
+follow-up work, or unrelated cleanup in `support_area`.
 
 ## Priority Semantics
 
@@ -129,8 +135,8 @@ Only create seeds when explicitly requested.
   to work from the work order record plus its stored labels/dependency
   edges, without opening `plan.md`. Put the planned seed card in the
   description, or a faithful compact rendering with execution-critical fields:
-  `temp_id` for traceability only, `seed_slug`, `area`, `source_refs`,
-  `acceptance`, `gates`, `verification_owner`, `target_gates`,
+  `temp_id` for traceability only, `seed_slug`, `area`, optional
+  `support_area`, `source_refs`, `acceptance`, `gates`, `verification_owner`, `target_gates`,
   `estimated_loc`, and `dispatch_notes`. Include a scope boundary: implement
   only this seed; use any plan references as context, not permission to
   implement other seed cards.

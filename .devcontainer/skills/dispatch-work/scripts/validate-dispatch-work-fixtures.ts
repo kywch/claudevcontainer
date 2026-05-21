@@ -6,14 +6,14 @@ import { childRunPaths } from "./dispatch-work-paths.ts";
 import { VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE } from "./knowledge-capture-validation.ts";
 import type { ReportRole } from "./validate-dispatch-work.ts";
 
-export function writeSeedIssue(repo: string, seed: string, area: string) {
+export function writeSeedIssue(repo: string, seed: string, area: string, supportArea?: string) {
   const issuesPath = join(repo, ".seeds", "issues.jsonl");
   mkdirp(dirname(issuesPath));
   writeFileSync(issuesPath, `${JSON.stringify({
     id: seed,
     status: "open",
     title: "Fixture seed",
-    description: `Fixture seed\n\narea: ${area}\n`,
+    description: `Fixture seed\n\narea: ${area}\n${supportArea ? `support_area: ${supportArea}\n` : ""}`,
   })}\n`);
 }
 

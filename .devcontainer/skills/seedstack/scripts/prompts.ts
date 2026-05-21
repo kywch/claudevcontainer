@@ -73,7 +73,11 @@ ${VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE.trimEnd()}
 - Done and escalate are mutually exclusive — use seq 001 for whichever applies. The gate decision may contain "close" for legacy validator compatibility; it does not mean queue close.
 - Write any unlisted dispatch-work artifacts under ${dispatchRoot(seed)}/.
 - Set decision to exactly one of: closed, blocked, escalated, crashed.
-- Do not write literal enum text such as "decision": "closed|blocked|escalated|crashed"; choose one value.
+- Prefer bounded self-heal before any non-closed decision: repair real missing/invalid artifacts, rerun or fix safe gate checks, and revalidate from disk when the failure is within this work order and can be corrected without destructive action or user input.
+- Choose closed only when the work order is complete, required gates actually ran, required artifacts validate, and evidence is real.
+- Choose blocked/escalated/crashed only for artifact/gate failures that cannot be repaired safely in bounded scope, or for unsafe/destructive/user/scope/queue needs.
+- Write ${resultFile} last after all artifacts and validation checks; treat that result file as the terminal fence for dispatch output.
+- Do not write literal combined enum text for decision; choose one value.
 - For non-closed decisions, omit round_path and set blocked_reason when useful.
 
 Required round-1 artifacts (the dispatch-work validator checks for all of these):
@@ -141,10 +145,11 @@ Each prompt_path file must include child artifact contract tags that match statu
 
 Do not use a single mixed write-root catch-all. Keep roots typed:
 - artifact_write_roots / dispatch_artifact_roots: dispatch-work artifacts under tmp/dispatch-work.
-- repo_edit_roots: implementation files/directories the work order may change.
+- repo_edit_roots: area plus support_area from the work order description. area is behavior ownership; support_area is only gate/harness/wrapper/report wiring needed to prove this seed.
 - seedstack_artifact_roots: seedstack supervision artifacts, not implementation edits.
 - gate_artifacts: gate and dispatcher report files, not child_run_status evidence.
 - dirty_baseline: preexisting dirty paths the child must preserve.
+- Do not use support_area to widen behavior ownership or add product scope. If support_area is absent, repo_edit_roots comes from area only.
 
 Seedstack result files and gate files are supervision/gate artifacts. They are not repo edits, and they are not dispatch child status evidence.
 
@@ -182,6 +187,12 @@ Do not list placeholder or blank paths. Do not list tmp/dispatch-work paths as i
 verify report (verify-1.md) must include a summary section with next_action field:
   ## Summary
   next_action: close
+- Before writing the final JSON result, do a success-only validation/repair pass:
+  - Re-read required artifact/status/launch-evidence/gate/knowledge-capture files from disk.
+  - Confirm every close/pass/done marker is backed by real report content and actual gate command evidence.
+  - Repair missing or malformed artifacts and rerun safe bounded checks when possible.
+  - If evidence is not real or repair is not safe/bounded, do not close; choose a non-closed decision with a truthful blocked_reason.
+  - Do not invent pass evidence, gate output, launch handles, close markers, pass markers, or done markers.
 - When finished, write this JSON shape to ${resultFile}:
 
 {
@@ -210,6 +221,7 @@ export function buildManagePrompt(args: {
   resultFile: string;
   remainingFollowups: number;
 }): string {
+  // Alignment sentinel for check-run-loop-model-alignment.ts: retry_same_seed|continue_other_seeds|blocked|done
   return `Use the seedstack skill in manage mode.
 
 Repo: ${args.repo}
@@ -226,19 +238,25 @@ Task:
 - Do not propose closing any other seed.
 - You may propose at most ${args.followupsPerManage} follow-up seeds in this manage step.
 - Total remaining follow-up budget is ${args.remainingFollowups}.
-- If more follow-ups are needed than budget permits, do not propose them; report blocked.
+- If more follow-ups are needed than budget permits, use a safe bounded op/retry/continue when one exists; report blocked only when no safe bounded operation, retry, or continue path exists.
 - proposed_queue_operations entries must be structured objects with:
   - op_type: one of close-current, create-follow-up, add-dependency, adjust-labels, no-op
   - target_seed: seed id affected by the operation
   - rationale: why the supervisor should apply it
   - source_artifact_refs: dispatch/reconcile artifact paths supporting it
-  - expected_preconditions: fresh queue facts the supervisor must verify before applying it
+  - expected_preconditions: queue facts the supervisor must verify from fresh queue state before applying it; do not claim fresh queue state yourself
   - details: optional operation-specific object, such as follow-up title/body, dependency ids, or labels to add/remove
 - Set decision to exactly one of: retry_same_seed, continue_other_seeds, blocked, done.
-- Use retry_same_seed only when the same seed should be dispatched again.
-- Use continue_other_seeds only after the current dispatch result is fully handled and the loop may select another seed.
-- For a non-closed dispatch result, choose retry_same_seed or blocked; do not use continue_other_seeds.
-- Do not write literal enum text such as "decision": "retry_same_seed|continue_other_seeds|blocked|done"; choose one value.
+- Prefer retry_same_seed for retryable non-closed dispatch results, including repairable artifact/gate failures and bounded same-seed self-heal opportunities. Same-seed retry is normal control flow, not failure.
+- Use continue_other_seeds only after the current dispatch result is fully handled and any required close/no-op/follow-up proposal is present.
+- You may allow mechanical area/support_area repair when dispatch is directionally correct: update prompt/root wiring, gate wrapper/report paths, or same-seed validation artifacts, then choose retry_same_seed when another bounded dispatch can prove it.
+- Treat true scope creep as blocked: behavior outside area, support_area used for product changes, unrelated dirty paths, new subsystem ownership, or follow-up work hidden inside gate wiring.
+- Use blocked only for destructive or unsafe operations, missing user decision, true scope conflict, queue-state need, capability limit, unowned dirty worktree, exhausted follow-up budget with no safe retry/continue/no-op path, or proven unfixable artifact/gate failure.
+- For a non-closed dispatch result, choose retry_same_seed unless a blocked condition above applies; do not use continue_other_seeds.
+- If no queue mutation is needed, propose a no-op with rationale and supervisor-verified expected_preconditions instead of omitting proposed_queue_operations.
+- proposed_queue_operations is required for blocked and retry_same_seed too. For retry_same_seed, use [] or one no-op only; do not propose close-current, create-follow-up, add-dependency, or adjust-labels.
+- For blocked, include [] only when no safe no-op precondition is meaningful; otherwise include one no-op describing why supervisor should not mutate queue state.
+- Do not write literal combined enum text for decision; choose one value.
 - Write this JSON shape to ${args.resultFile}:
 
 {

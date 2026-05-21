@@ -138,6 +138,9 @@ Root lists accept whitespace or semicolon separators. Dispatch artifacts
 `.seeds/**` are excluded from implementation-root checks. Legacy
 `allowed_write_roots` remains accepted for old artifacts, but typed
 `repo_edit_roots` wins when present.
+For Seedstack work orders, validators allow the union of primary `area` and
+optional `support_area` as seed edit roots. `support_area` remains gate,
+harness, wrapper, or report wiring, not behavior ownership.
 Source refs, commands, gate command paths, research notes, and prose examples
 are not edit evidence. Actual changed repo paths from the dirty
 snapshot/status must fall under `repo_edit_roots`; out-of-scope prose mentions

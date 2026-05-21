@@ -13,19 +13,24 @@ type Card = Record<string, CardValue> & { gates?: Gate[] };
 
 function usage(exitCode: 0 | 2): never {
   const stream = exitCode === 0 ? process.stdout : process.stderr;
-  stream.write("usage: check-plan.ts <plan> --shared-label <label>\n");
+  stream.write("usage: check-plan.ts <plan> --shared-label <label>\n       check-plan.ts --self-test\n");
   process.exit(exitCode);
 }
 
-function parseArgs(): { plan: string; sharedLabel: string } {
+function parseArgs(): { plan?: string; sharedLabel?: string; selfTest: boolean } {
   const args = process.argv.slice(2);
   if (args.includes("-h") || args.includes("--help")) {
     usage(0);
   }
   let plan: string | undefined;
   let sharedLabel: string | undefined;
+  let selfTest = false;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
+    if (arg === "--self-test") {
+      selfTest = true;
+      continue;
+    }
     if (arg === "--shared-label") {
       sharedLabel = args[++index];
       continue;
@@ -42,10 +47,13 @@ function parseArgs(): { plan: string; sharedLabel: string } {
     }
     plan = arg;
   }
+  if (selfTest) {
+    return { selfTest };
+  }
   if (!plan || !sharedLabel?.trim()) {
     usage(2);
   }
-  return { plan, sharedLabel };
+  return { plan, sharedLabel, selfTest };
 }
 
 function parseList(value: string): string[] {
@@ -87,7 +95,7 @@ function extractCards(text: string): Card[] {
   const cards: Card[] = [];
   const fencePattern = /^[ \t]*```ya?ml[^\r\n]*\r?\n([\s\S]*?)^[ \t]*```/gim;
   const seedCardKeyPattern =
-    /^\s*(temp_id|seed_slug|title|labels|priority|blocked_by|parallel_ok|area|source_refs|acceptance|gates|verification_owner|target_gates|estimated_loc|dispatch_notes):/m;
+    /^\s*(temp_id|seed_slug|title|labels|priority|blocked_by|parallel_ok|area|support_area|source_refs|acceptance|gates|verification_owner|target_gates|estimated_loc|dispatch_notes):/m;
   for (const match of text.matchAll(fencePattern)) {
     const block = dedent(match[1]);
     if (!seedCardKeyPattern.test(block)) {
@@ -221,7 +229,33 @@ function nonemptyListWithoutPlaceholders(
   return values;
 }
 
-const { plan, sharedLabel } = parseArgs();
+function parseAreaRoots(value: CardValue | undefined): string[] {
+  if (typeof value !== "string") return [];
+  return value
+    .split(/[+;,|]/)
+    .map((item) => item.trim().replace(/^['"`]|['"`]$/g, "").replace(/^\.?\//, "").replace(/\/+$/, ""))
+    .filter(Boolean);
+}
+
+function validAreaRoot(value: string): boolean {
+  if (placeholderText(value)) return false;
+  if (value.startsWith("/") || value.startsWith("tmp/") || value.startsWith(".seeds/")) return false;
+  if (/\s/.test(value)) return false;
+  return /^(?:[A-Za-z0-9._+-]+\/)*[A-Za-z0-9._+-]+(?:\.[A-Za-z0-9][A-Za-z0-9._+-]*)?$/.test(value);
+}
+
+function gateText(card: Card): string {
+  const gates = Array.isArray(card.gates) ? card.gates.map((gate) => gate.raw) : [];
+  const targetGates = asStringArray(card.target_gates) ?? [];
+  return [...gates, ...targetGates].join("\n");
+}
+
+const args = parseArgs();
+if (args.selfTest) {
+  process.exit(runSelfTest());
+}
+const plan = args.plan ?? "";
+const sharedLabel = args.sharedLabel ?? "";
 if (!validLabel(sharedLabel)) {
   console.error(`check-plan: invalid shared label ${sharedLabel}`);
   process.exit(2);
@@ -234,6 +268,11 @@ try {
   console.error(`check-plan: cannot read ${plan}:${code}`);
   process.exit(2);
 }
+const result = validatePlanText(plan, text, sharedLabel);
+console.log(JSON.stringify(result, null, 2));
+process.exit(result.ok ? 0 : 1);
+
+function validatePlanText(plan: string, text: string, sharedLabel: string) {
 const cards = extractCards(text);
 const errors: string[] = [];
 
@@ -276,6 +315,33 @@ for (const card of cards) {
     const value = card[field];
     if (typeof value !== "string" || !value.trim() || placeholderText(value)) {
       errors.push(`${tempId}: missing or placeholder ${field}`);
+    }
+  }
+
+  const areaRoots = parseAreaRoots(card.area);
+  for (const root of areaRoots) {
+    if (!validAreaRoot(root)) {
+      errors.push(`${tempId}: invalid area root ${root}`);
+    }
+  }
+
+  const supportRoots = parseAreaRoots(card.support_area);
+  if (card.support_area !== undefined) {
+    if (supportRoots.length === 0) {
+      errors.push(`${tempId}: empty or invalid support_area`);
+    }
+    for (const root of supportRoots) {
+      if (!validAreaRoot(root)) {
+        errors.push(`${tempId}: invalid support_area root ${root}`);
+      }
+      if (areaRoots.includes(root)) {
+        errors.push(`${tempId}: support_area duplicates area root ${root}`);
+      }
+    }
+    const gatesAndTargets = gateText(card);
+    for (const root of supportRoots) {
+      if (gatesAndTargets.includes(root)) continue;
+      errors.push(`${tempId}: support_area ${root} is not referenced by gates or target_gates`);
     }
   }
 
@@ -349,16 +415,57 @@ for (const [seed, deps] of depsById) {
   }
 }
 
-const result = {
-  errors,
-  ok: errors.length === 0,
-  plan,
-  seed_count: cards.length,
-  shared_label: sharedLabel,
-};
+  return {
+    errors,
+    ok: errors.length === 0,
+    plan,
+    seed_count: cards.length,
+    shared_label: sharedLabel,
+  };
+}
 
-console.log(JSON.stringify(result, null, 2));
-process.exit(errors.length === 0 ? 0 : 1);
+function runSelfTest(): number {
+  const planText = [
+    "# Plan",
+    "",
+    "```yaml",
+    "temp_id: N1",
+    "seed_slug: support-area-fixture",
+    "title: Add support area fixture",
+    "labels: [net-fixture, impl]",
+    "priority: 1",
+    "blocked_by: []",
+    "parallel_ok: false",
+    "area: src/app",
+    "support_area: test/harness",
+    "source_refs:",
+    "  - src/app/main.ts:1",
+    "acceptance:",
+    "  - Behavior passes through harness.",
+    "gates:",
+    "  - type: unit",
+    "    command: bun test test/harness/support-area.test.ts",
+    "verification_owner:",
+    "  - N1 owns harness proof for this seed.",
+    "target_gates:",
+    "  - bun test test/harness/support-area.test.ts",
+    "estimated_loc: 20-60",
+    "dispatch_notes:",
+    "  - Edit src/app and gate wrapper under test/harness only.",
+    "```",
+    "",
+  ].join("\n");
+  const accepted = validatePlanText("self-test-plan.md", planText, "net-fixture");
+  const duplicate = validatePlanText("self-test-plan.md", planText.replace("support_area: test/harness", "support_area: src/app"), "net-fixture");
+  const missingGateRef = validatePlanText("self-test-plan.md", planText.replace("support_area: test/harness", "support_area: test/wrapper"), "net-fixture");
+  const tests = [
+    { name: "accepts support_area", pass: accepted.ok, errors: accepted.errors },
+    { name: "rejects support_area duplicate of area", pass: !duplicate.ok && duplicate.errors.some((error) => error.includes("duplicates area")), errors: duplicate.errors },
+    { name: "checks support_area gate reference", pass: !missingGateRef.ok && missingGateRef.errors.some((error) => error.includes("not referenced by gates")), errors: missingGateRef.errors },
+  ];
+  console.log(JSON.stringify({ ok: tests.every((test) => test.pass), tests }, null, 2));
+  return tests.every((test) => test.pass) ? 0 : 1;
+}
 
 function findCycles(ids: string[], depsBySeed: Map<string, string[]>): string[][] {
   const cycles: string[][] = [];

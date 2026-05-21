@@ -482,6 +482,22 @@ export function runSelfTest(pretty: boolean): number {
     );
     const semicolonArea = validateDispatch({ ...parseArgs([]), repo: semicolonAreaRepo, seed });
 
+    const supportAreaRepo = join(root, "support-area-repo");
+    makeFixtureRound(supportAreaRepo, seed, join(supportAreaRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeSeedIssue(supportAreaRepo, seed, "packages/api", "test/harness");
+    setRepoEditRoots(supportAreaRepo, seed, "packages/api test/harness");
+    const supportAreaGatePath = join(supportAreaRepo, "tmp/dispatch-work", seed, "gate.md");
+    writeFileSync(
+      supportAreaGatePath,
+      readFileSync(supportAreaGatePath, "utf8").replace(
+        "Known dirty paths: none.",
+        "Known dirty paths:\n- `test/harness/wrapper.ts`: harness update.",
+      ),
+    );
+    const supportAreaSnapshotPath = join(supportAreaRepo, "snapshot.json");
+    writeFileSync(supportAreaSnapshotPath, `${JSON.stringify(snapshotFromStatus(supportAreaRepo, " M test/harness/wrapper.ts\n"))}\n`);
+    const supportArea = validateDispatch({ ...parseArgs([]), repo: supportAreaRepo, seed, dirtyStatusFile: supportAreaSnapshotPath });
+
     const dirtyGuardMismatchRepo = join(root, "dirty-guard-mismatch-repo");
     makeFixtureRound(dirtyGuardMismatchRepo, seed, join(dirtyGuardMismatchRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
     writeSeedIssue(dirtyGuardMismatchRepo, seed, "impl_v2/rust");
@@ -693,6 +709,7 @@ export function runSelfTest(pretty: boolean): number {
       { name: "comma area passes", pass: commaArea.ok, blockers: commaArea.blockers.length },
       { name: "comma repo_edit_roots list passes", pass: commaRootList.ok, blockers: commaRootList.blockers.length },
       { name: "semicolon area passes", pass: semicolonArea.ok, blockers: semicolonArea.blockers.length },
+      { name: "support_area repo_edit_roots and dirty paths pass", pass: supportArea.ok, blockers: supportArea.blockers.length },
       { name: "dirty guard actual path mismatch blocks", pass: !dirtyGuardMismatch.ok && dirtyGuardMismatch.blockers.some((finding) => finding.code === "gate_dirty_guard_path_mismatch"), blockers: dirtyGuardMismatch.blockers.length },
       { name: "structured dirty guard matching snapshot passes", pass: structuredGuard.ok, blockers: structuredGuard.blockers.length },
       { name: "strict dirty guard snapshot mismatch blocks", pass: !structuredSnapshotMismatchStrict.ok && structuredSnapshotMismatchStrict.blockers.some((finding) => finding.code === "gate_dirty_guard_snapshot_mismatch"), blockers: structuredSnapshotMismatchStrict.blockers.length },

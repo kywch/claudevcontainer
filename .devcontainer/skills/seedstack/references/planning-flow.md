@@ -99,6 +99,9 @@ wrappers; do not assume aliases or wrappers unavailable in their environment.
   execution readiness.
 - Keep protocol-visible behavior separate from implementation mechanics.
 - Keep implementation seeds scoped to one language and one boundary.
+- Use `support_area` only when proving the seed requires gate, harness,
+  wrapper, or report wiring outside `area`. Keep it distinct from `area` and
+  reference it in gates or target gates.
 - Each behavior seed owns closest verification; do not defer required checks to
   a later hardening seed.
 - For broad implementation or subsystem work, add an implementation boundary
