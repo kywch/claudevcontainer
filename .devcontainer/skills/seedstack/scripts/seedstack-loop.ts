@@ -609,8 +609,9 @@ function scanIssueById(scan: JsonObject, id: string): JsonObject | null {
   return null;
 }
 
-function validateQueueOperationPreconditions(op: QueueOperation, seed: string, preScan: JsonObject, reconcilePath: string): string[] {
+function validateQueueOperationPreconditions(op: QueueOperation, seed: string, preScan: JsonObject, reconcilePath: string): { blockers: string[]; warnings: string[] } {
   const blockers: string[] = [];
+  const warnings: string[] = [];
   const supported = new Set(["close-current", "create-follow-up", "add-dependency", "adjust-labels", "no-op"]);
   if (!supported.has(op.op_type)) blockers.push(`unsupported operation ${op.op_type}`);
   const target = op.op_type === "create-follow-up" ? null : scanIssueById(preScan, op.target_seed);
@@ -641,10 +642,10 @@ function validateQueueOperationPreconditions(op: QueueOperation, seed: string, p
     } else if (lower.includes("dispatch reconcile result") || lower.includes("reconcile")) {
       if (!existsSync(reconcilePath)) blockers.push(`reconcile artifact missing: ${reconcilePath}`);
     } else {
-      blockers.push(`unsupported precondition: ${precondition}`);
+      warnings.push(`unsupported precondition treated as advisory: ${precondition}`);
     }
   }
-  return blockers;
+  return { blockers, warnings };
 }
 
 function buildQueueOperationArgv(op: QueueOperation): string[] | { error: string } {
@@ -724,6 +725,7 @@ function applyManageQueueOperations(
       proposal_count: proposals.length,
       applied_count: 0,
       blockers: ["fresh queue scan failed before applying proposed operations"],
+      warnings: [],
       before_seed_ids: [],
       after_seed_ids: [],
       queue_dirty_paths: queueDirtyPaths(),
@@ -737,6 +739,7 @@ function applyManageQueueOperations(
   }
   const normalized: QueueOperation[] = [];
   const blockers: string[] = [];
+  const warnings: string[] = [];
   proposals.forEach((proposal, index) => {
     const op = normalizeQueueOperation(proposal, index);
     if ("error" in op) {
@@ -744,7 +747,9 @@ function applyManageQueueOperations(
       return;
     }
     normalized.push(op);
-    blockers.push(...validateQueueOperationPreconditions(op, seed, preApplyScan, reconcilePath).map((item) => `proposal ${index}: ${item}`));
+    const validation = validateQueueOperationPreconditions(op, seed, preApplyScan, reconcilePath);
+    blockers.push(...validation.blockers.map((item) => `proposal ${index}: ${item}`));
+    warnings.push(...validation.warnings.map((item) => `proposal ${index}: ${item}`));
   });
   const beforeIds = scanListIds(preApplyScan);
   const commands: QueueOperationCommand[] = [];
@@ -780,6 +785,7 @@ function applyManageQueueOperations(
     applied_count: commands.length,
     partial_applied: blockers.length > 0 && commands.length > 0,
     blockers,
+    warnings,
     before_seed_ids: beforeIds,
     after_seed_ids: afterScan ? scanListIds(afterScan) : beforeIds,
     queue_dirty_paths: queueDirty,
@@ -3403,11 +3409,19 @@ else if (command === "close") {
         target_seed: "seed-test",
         rationale: "done",
         source_artifact_refs: [reconcilePath],
-        expected_preconditions: ["seed seed-test is still open", `latest dispatch reconcile result still matches ${reconcilePath}`],
+        expected_preconditions: [
+          "seed seed-test is still open",
+          `latest dispatch reconcile result still matches ${reconcilePath}`,
+          "supervisor fresh queue state check finds no newer dispatch/manage artifact superseding this decision",
+        ],
         details: {},
       },
     ]);
     assertSelfTest(ok(appliedClose), "queue ops close apply succeeds");
+    assertSelfTest(
+      stringArray(appliedClose.warnings).some((item) => item.includes("unsupported precondition treated as advisory")),
+      "queue ops records advisory unsupported precondition warning",
+    );
     assertSelfTest(stringArray(appliedClose.queue_dirty_paths).includes(".seeds/issues.jsonl"), "queue ops close ledger records dirty queue path");
     const appliedCreate = applyManageQueueOperations(seedstackDir, 2, "seed-test", childPreScan, reconcilePath, [
       {

@@ -244,7 +244,7 @@ Task:
   - target_seed: seed id affected by the operation
   - rationale: why the supervisor should apply it
   - source_artifact_refs: dispatch/reconcile artifact paths supporting it
-  - expected_preconditions: queue facts the supervisor must verify from fresh queue state before applying it; do not claim fresh queue state yourself
+  - expected_preconditions: queue facts the supervisor must verify from fresh queue state before applying it. Use only supervisor-supported facts such as "seed ${args.seed} is still open" and "latest dispatch reconcile result still matches ${args.reconcileFile}". Put extra freshness concerns or reasoning in rationale/details, not expected_preconditions.
   - details: optional operation-specific object, such as follow-up title/body, dependency ids, or labels to add/remove
 - Set decision to exactly one of: retry_same_seed, continue_other_seeds, blocked, done.
 - Prefer retry_same_seed for retryable non-closed dispatch results, including repairable artifact/gate failures and bounded same-seed self-heal opportunities. Same-seed retry is normal control flow, not failure.
