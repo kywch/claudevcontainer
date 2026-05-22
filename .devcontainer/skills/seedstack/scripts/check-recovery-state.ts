@@ -307,7 +307,7 @@ function chooseTransitionTarget(state: RunStateName, runState: unknown, scan: un
   return "dispatching";
 }
 
-function updateCommand(options: Options, state: RunStateName, seed: string | null): Command {
+function updateCommand(options: Options, state: RunStateName, seed: string | null, evidence?: { reconcileResult?: string; commit?: string }): Command {
   const argv = [
     "bun",
     "skills/seedstack/scripts/update-run-state.ts",
@@ -317,7 +317,107 @@ function updateCommand(options: Options, state: RunStateName, seed: string | nul
     state,
   ];
   if (seed) argv.push("--seed", seed);
+  if (evidence?.reconcileResult) argv.push("--reconcile-result", evidence.reconcileResult);
+  if (evidence?.commit) argv.push("--commit", evidence.commit);
+  if (state === "dispatching" || state === "managing") {
+    argv.push("--decision", "recovery_resume", "--rationale", `recover terminal ${state} workflow after validated evidence`);
+  }
   return command(argv, "run-state mutation must go through update-run-state.ts");
+}
+
+function runStateReasons(runState: unknown): string[] {
+  if (!isObject(runState)) return [];
+  return [
+    stringField(runState.stop_reason),
+    stringField(runState.blocked_reason),
+    stringField(runState.done_reason),
+    stringField(latestDispatch(runState)?.status),
+  ].filter((item): item is string => !!item);
+}
+
+function latestPerSeedCommitRecoveryCommit(seedstackDir: string | undefined, seed: string | null): string | null {
+  if (!seedstackDir || !seed) return null;
+  const recoveryDir = join(seedstackDir, "recovery");
+  if (!existsSync(recoveryDir)) return null;
+  const dirs = readdirSync(recoveryDir).filter((name) => /^rec-\d+$/.test(name)).sort().reverse();
+  for (const dir of dirs) {
+    const path = join(recoveryDir, dir, "per-seed-commit-recovery.json");
+    if (!existsSync(path)) continue;
+    try {
+      const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      if (!isObject(raw) || raw.contract !== "per_seed_commit_recovery.v1") continue;
+      if (stringField(raw.seed) !== seed) continue;
+      const commit = stringField(raw.commit);
+      if (commit) return commit;
+    } catch {
+      // Ignore malformed recovery artifacts; advisory remains conservative.
+    }
+  }
+  return null;
+}
+
+function commitFromCheck(commit: unknown): string | null {
+  return isObject(commit) ? stringField(commit.commit) : null;
+}
+
+function commitLedgerCommand(options: Options, seed: string | null, commit?: string | null): Command {
+  const argv = ["bun", "skills/seedstack/scripts/check-commit-ledger.ts"];
+  if (options.seedstackDir) argv.push("--seedstack-dir", options.seedstackDir);
+  if (options.runState) argv.push("--run-state", options.runState);
+  if (seed) argv.push("--seed", seed);
+  if (commit) argv.push("--commit", commit);
+  argv.push("--commit-policy", "per_seed", "--pretty");
+  return command(argv, "per-seed terminal recovery must verify commit ledger before state mutation");
+}
+
+function terminalRecovery(options: Options, state: RunStateName, runState: unknown, dirty: unknown, reconcile: unknown, commit: unknown, seed: string | null): { decision: Decision; command: Command } | null {
+  if (state !== "blocked" && state !== "escalated") return null;
+  const reasons = runStateReasons(runState).join(" ");
+  if (reasons.includes("per_seed_commit_recovery_required")) {
+    const verifiedCommit = commitFromCheck(commit);
+    if (ok(commit) === true && decision(commit) === "ledger_ready" && verifiedCommit) {
+      return {
+        decision: "run_state_update_required",
+        command: updateCommand(options, "managing", seed, { commit: verifiedCommit }),
+      };
+    }
+    const recoveryCommit = latestPerSeedCommitRecoveryCommit(options.seedstackDir, seed);
+    return {
+      decision: "commit_ledger_required",
+      command: commitLedgerCommand(options, seed, recoveryCommit),
+    };
+  }
+  if (reasons.includes("manage_queue_operation_precondition_failed")) {
+    return {
+      decision: "run_state_update_required",
+      command: updateCommand(options, "managing", seed),
+    };
+  }
+  if (reasons.includes("dispatch_reconcile_blocked") || reasons.includes("dispatch_exact_validation_failed")) {
+    if (reconcile && ok(reconcile) === true && decision(reconcile) === "manage_reconcile") {
+      return {
+        decision: "run_state_update_required",
+        command: updateCommand(options, "managing", seed, { reconcileResult: options.reconcileResult }),
+      };
+    }
+    const argv = ["bun", "skills/seedstack/scripts/check-dispatch-reconcile.ts"];
+    if (seed) argv.push("--seed", seed);
+    if (options.seedstackDir) argv.push("--seedstack-dir", options.seedstackDir);
+    argv.push("--commit-policy", "none", "--pretty");
+    return {
+      decision: "reconcile_required",
+      command: command(argv, "blocked dispatch reconcile should be rechecked before any state mutation"),
+    };
+  }
+  const dirtyTypoOrBlock = /(?:unexpected|preexisting)_(?:dirty|ditry|diryt)/.test(reasons) || /(?:dirty|ditry|diryt)_before_/.test(reasons);
+  if (dirtyTypoOrBlock && ok(dirty) === true && unexpectedDirtyPaths(dirty).length === 0) {
+    const resumeState = reasons.includes("before_manage") || reasons.includes("before_retry") || reasons.includes("before_commit") ? "managing" : "idle";
+    return {
+      decision: "run_state_update_required",
+      command: updateCommand(options, resumeState, seed),
+    };
+  }
+  return null;
 }
 
 function check(options: Options): Result {
@@ -384,7 +484,13 @@ function check(options: Options): Result {
       attempt: latestAttempt(options.seedstackDir, "dispatch", seed)?.__path,
     });
   } else if (TERMINAL.has(state)) {
-    recoveryDecision = "no_op";
+    const terminal = terminalRecovery(options, state, runState, dirty, reconcile, commit, seed);
+    if (terminal) {
+      recoveryDecision = terminal.decision;
+      next = terminal.command;
+    } else {
+      recoveryDecision = "no_op";
+    }
   } else if (state === "dispatching" && !reconcile) {
     recoveryDecision = "reconcile_required";
     const argv = ["bun", "skills/seedstack/scripts/check-dispatch-reconcile.ts"];
@@ -494,6 +600,40 @@ function selfTest(): void {
     const idle = fixture(dir, "idle.json", { state: "idle", commit_policy: "per_seed" });
     const dispatching = fixture(dir, "dispatching.json", { state: "dispatching", in_flight_seed_id: "S-1" });
     const done = fixture(dir, "done.json", { state: "done" });
+    const blockedPrecondition = fixture(dir, "blocked-precondition.json", {
+      state: "blocked",
+      in_flight_seed_id: "S-1",
+      blocked_reason: "manage_queue_operation_precondition_failed",
+      stop_reason: "manage_queue_operation_precondition_failed",
+    });
+    const blockedReconcile = fixture(dir, "blocked-reconcile.json", {
+      state: "blocked",
+      in_flight_seed_id: "S-1",
+      blocked_reason: "dispatch_reconcile_blocked",
+      stop_reason: "dispatch_reconcile_blocked",
+    });
+    const blockedDirtyTypo = fixture(dir, "blocked-dirty-typo.json", {
+      state: "blocked",
+      in_flight_seed_id: "S-1",
+      blocked_reason: "unexpected_ditry_before_manage",
+      stop_reason: "unexpected_ditry_before_manage",
+    });
+    const blockedPerSeedCommit = fixture(dir, "blocked-per-seed-commit.json", {
+      state: "blocked",
+      in_flight_seed_id: "S-1",
+      commit_policy: "per_seed",
+      blocked_reason: "per_seed_commit_recovery_required",
+      stop_reason: "per_seed_commit_recovery_required",
+      latest_dispatch: { seed_id: "S-1", status: "closed_clean", commit_pending: true },
+    });
+    const commitRecoveryDir = join(dir, "recovery", "rec-0001");
+    mkdirSync(commitRecoveryDir, { recursive: true });
+    fixture(commitRecoveryDir, "per-seed-commit-recovery.json", {
+      contract: "per_seed_commit_recovery.v1",
+      recoverable: true,
+      seed: "S-1",
+      commit: "abc1234",
+    });
     const scanReady = fixture(dir, "scan-ready.json", {
       contract: "seedstack_scan.v1",
       ok: true,
@@ -520,6 +660,20 @@ function selfTest(): void {
       contract: "run_transition_check.v1",
       ok: true,
       decision: "transition_ready",
+    });
+    const reconcileOk = fixture(dir, "reconcile-ok.json", {
+      contract: "dispatch_reconcile_check.v1",
+      ok: true,
+      decision: "manage_reconcile",
+      seed: "S-1",
+      validation: { summary: { gate: { decision: "close" } } },
+    });
+    const commitOk = fixture(dir, "commit-ok.json", {
+      contract: "commit_ledger_check.v1",
+      ok: true,
+      decision: "ledger_ready",
+      seed: "S-1",
+      commit: "abc1234",
     });
     const attemptDir = childAttemptsDir(dir);
     mkdirSync(attemptDir, { recursive: true });
@@ -569,6 +723,29 @@ function selfTest(): void {
       "no_op",
       true,
     );
+    const preconditionRecovery = check({ repo: dir, seedstackDir: dir, runState: blockedPrecondition, scanFile: scanReady, adoptionCheck: adoption, dirtyResult: clean, seedCli: "sd", pretty: false, selfTest: false });
+    assertCase("blocked precondition recommends manage recovery", preconditionRecovery, "run_state_update_required", true);
+    if (!preconditionRecovery.next_safe_command?.argv.includes("managing")) throw new Error("blocked precondition recovery did not target managing");
+    assertCase(
+      "blocked reconcile recommends reconcile",
+      check({ repo: dir, seedstackDir: dir, runState: blockedReconcile, scanFile: scanReady, adoptionCheck: adoption, dirtyResult: clean, seedCli: "sd", pretty: false, selfTest: false }),
+      "reconcile_required",
+      true,
+    );
+    const reconcileRecovery = check({ repo: dir, seedstackDir: dir, runState: blockedReconcile, scanFile: scanReady, adoptionCheck: adoption, dirtyResult: clean, reconcileResult: reconcileOk, seedCli: "sd", pretty: false, selfTest: false });
+    assertCase("blocked reconcile evidence updates managing", reconcileRecovery, "run_state_update_required", true);
+    if (!reconcileRecovery.next_safe_command?.argv.includes("--reconcile-result")) throw new Error("blocked reconcile recovery omitted reconcile evidence");
+    const perSeedRecovery = check({ repo: dir, seedstackDir: dir, runState: blockedPerSeedCommit, scanFile: scanReady, adoptionCheck: adoption, dirtyResult: clean, seedCli: "sd", pretty: false, selfTest: false });
+    assertCase("blocked per-seed commit recommends ledger check", perSeedRecovery, "commit_ledger_required", true);
+    if (!perSeedRecovery.next_safe_command?.argv.includes("skills/seedstack/scripts/check-commit-ledger.ts")) throw new Error("per-seed commit recovery did not target commit ledger");
+    if (!perSeedRecovery.next_safe_command?.argv.includes("abc1234")) throw new Error("per-seed commit recovery omitted recovery artifact commit");
+    const perSeedUpdate = check({ repo: dir, seedstackDir: dir, runState: blockedPerSeedCommit, scanFile: scanReady, adoptionCheck: adoption, dirtyResult: clean, commitCheck: commitOk, seedCli: "sd", pretty: false, selfTest: false });
+    assertCase("blocked per-seed commit evidence updates managing", perSeedUpdate, "run_state_update_required", true);
+    if (!perSeedUpdate.next_safe_command?.argv.includes("managing")) throw new Error("per-seed commit recovery did not target managing");
+    if (!perSeedUpdate.next_safe_command?.argv.includes("--commit") || !perSeedUpdate.next_safe_command?.argv.includes("abc1234")) throw new Error("per-seed commit recovery update omitted commit");
+    const dirtyTypoRecovery = check({ repo: dir, seedstackDir: dir, runState: blockedDirtyTypo, scanFile: scanReady, adoptionCheck: adoption, dirtyResult: clean, seedCli: "sd", pretty: false, selfTest: false });
+    assertCase("blocked dirty typo recommends recovery", dirtyTypoRecovery, "run_state_update_required", true);
+    if (!dirtyTypoRecovery.next_safe_command?.argv.includes("managing")) throw new Error("blocked dirty typo recovery did not target managing");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

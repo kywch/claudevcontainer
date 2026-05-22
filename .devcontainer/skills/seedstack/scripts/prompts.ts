@@ -239,12 +239,17 @@ Task:
 - You may propose at most ${args.followupsPerManage} follow-up seeds in this manage step.
 - Total remaining follow-up budget is ${args.remainingFollowups}.
 - If more follow-ups are needed than budget permits, use a safe bounded op/retry/continue when one exists; report blocked only when no safe bounded operation, retry, or continue path exists.
+- Propose at most one mutating queue operation. Mutating op_type values are close-current, create-follow-up, add-dependency, and adjust-labels. no-op is non-mutating.
+- Prefer close-current over every other mutating operation when dispatch is closed cleanly and reconcile evidence supports closing this seed.
 - proposed_queue_operations entries must be structured objects with:
   - op_type: one of close-current, create-follow-up, add-dependency, adjust-labels, no-op
   - target_seed: seed id affected by the operation
   - rationale: why the supervisor should apply it
   - source_artifact_refs: dispatch/reconcile artifact paths supporting it
-  - expected_preconditions: queue facts the supervisor must verify from fresh queue state before applying it. Use only supervisor-supported facts such as "seed ${args.seed} is still open" and "latest dispatch reconcile result still matches ${args.reconcileFile}". Put extra freshness concerns or reasoning in rationale/details, not expected_preconditions.
+  - expected_preconditions: closed supervisor-supported facts only. Use string enums or object forms, never free text:
+    - "target_seed_open" or {"fact":"target_seed_open","seed":"${args.seed}"}
+    - "reconcile_artifact_exists" or {"fact":"reconcile_artifact_exists","path":"${args.reconcileFile}"}
+  - advisory_notes: optional string array for extra freshness concerns, reasoning, or non-blocking context. Do not put advisory text in expected_preconditions.
   - details: optional operation-specific object, such as follow-up title/body, dependency ids, or labels to add/remove
 - Set decision to exactly one of: retry_same_seed, continue_other_seeds, blocked, done.
 - Prefer retry_same_seed for retryable non-closed dispatch results, including repairable artifact/gate failures and bounded same-seed self-heal opportunities. Same-seed retry is normal control flow, not failure.
@@ -273,7 +278,11 @@ Task:
       "target_seed": "${args.seed}",
       "rationale": "dispatch result is locally closed and accepted by reconcile evidence",
       "source_artifact_refs": ["${args.reconcileFile}"],
-      "expected_preconditions": ["seed ${args.seed} is still open", "latest dispatch reconcile result still matches ${args.reconcileFile}"],
+      "expected_preconditions": [
+        {"fact": "target_seed_open", "seed": "${args.seed}"},
+        {"fact": "reconcile_artifact_exists", "path": "${args.reconcileFile}"}
+      ],
+      "advisory_notes": [],
       "details": {}
     }
   ],

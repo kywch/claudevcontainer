@@ -32,6 +32,7 @@ import {
   childAttemptsDir,
   childAttemptPath,
   childFailureCapsulePath,
+  allocateRecoveryAttempt,
   recoveryAttemptDir,
   recoveryScanPath,
   recoveryValidationPath,
@@ -1755,6 +1756,85 @@ function latestDispatchNonclosed(runState: JsonObject): boolean {
   return status === "nonclosed_reconciled";
 }
 
+function latestDispatchClosedClean(runState: JsonObject): boolean {
+  const latest = isObject(runState.latest_dispatch) ? runState.latest_dispatch : {};
+  return stringField(latest.status) === "closed_clean";
+}
+
+function hasCloseCurrentProposal(proposals: JsonObject[], seed: string): boolean {
+  return proposals.some((proposal) =>
+    stringField(proposal.op_type) === "close-current" &&
+    stringField(proposal.target_seed) === seed,
+  );
+}
+
+function scanProvesSeedClosed(scan: JsonObject, seed: string): boolean {
+  const issue = scanIssueById(scan, seed);
+  if (issue) return stringField(issue.status) === "closed";
+  return stringArray(scan.closed_adopted).includes(seed) || stringArray(isObject(scan.ids) ? scan.ids.adopted_closed_ids : undefined).includes(seed);
+}
+
+function writeCloseCurrentInvariantArtifact(
+  seedstackDir: string,
+  iteration: number,
+  seed: string,
+  reason: string,
+  detail: JsonObject,
+): string {
+  return writeLoopJson(seedstackDir, iteration, `manage-close-current-invariant-${seed}`, {
+    contract: "manage_close_current_invariant.v1",
+    ok: false,
+    seed,
+    reason,
+    required_when: "latest_dispatch.status=closed_clean and manage decision is continue_other_seeds or done",
+    ...detail,
+  });
+}
+
+function writePerSeedCommitRecoveryArtifact(
+  seedstackDir: string,
+  iteration: number,
+  seed: string,
+  phase: string,
+  metadata: PerSeedCommitMetadata,
+  detail: JsonObject,
+): string {
+  const attempt = allocateRecoveryAttempt(seedstackDir);
+  const dir = recoveryAttemptDir(seedstackDir, attempt);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "per-seed-commit-recovery.json");
+  writeJson(path, {
+    contract: "per_seed_commit_recovery.v1",
+    recoverable: true,
+    seed,
+    phase,
+    iteration,
+    commit: metadata.commit,
+    head_before: metadata.headBefore,
+    head_after: metadata.headAfter,
+    changed_path_allowlist: metadata.changedPathAllowlist,
+    worktree_root: metadata.worktreeRoot,
+    branch: metadata.branch,
+    git_common_dir: metadata.gitCommonDir,
+    run_state: statePath(seedstackDir),
+    commit_ledger: commitLedgerPath(seedstackDir),
+    recovery: {
+      next_step: "resume supervisor or repair ledger/run-state from this artifact; git commit already succeeded",
+      expected_latest_dispatch: {
+        seed_id: seed,
+        status: "closed_clean",
+        commit_pending: false,
+        commit: metadata.commit,
+        head_before: metadata.headBefore,
+        head_after: metadata.headAfter,
+        changed_path_allowlist: metadata.changedPathAllowlist,
+      },
+    },
+    detail,
+  });
+  return path;
+}
+
 function createPerSeedCommit(seedstackDir: string, iteration: number, seed: string, dirtyPath: string, dirty: JsonObject): PerSeedCommitMetadata {
   const beforeStaged = stagedPaths();
   if (beforeStaged.length > 0) {
@@ -1776,6 +1856,7 @@ function createPerSeedCommit(seedstackDir: string, iteration: number, seed: stri
   if (paths.length === 0) {
     stop(seedstackDir, iteration, "blocked", "no_seed_owned_paths_to_commit", { seed, dirty: dirtyPath });
   }
+  let metadata: PerSeedCommitMetadata | null = null;
   try {
     runGit(["add", "-A", "--", ...paths]);
     const diff = runGit(["diff", "--cached", "--quiet"], true);
@@ -1784,7 +1865,7 @@ function createPerSeedCommit(seedstackDir: string, iteration: number, seed: stri
     }
     runGit(["commit", "-m", `seedstack: close ${seed}`]);
     const commit = runGit(["rev-parse", "HEAD"]).stdout;
-    const metadata: PerSeedCommitMetadata = {
+    metadata = {
       commit,
       worktreeRoot: currentWorktreeRoot(),
       branch: currentBranch(),
@@ -1793,13 +1874,28 @@ function createPerSeedCommit(seedstackDir: string, iteration: number, seed: stri
       gitCommonDir: currentGitCommonDir(),
       changedPathAllowlist: paths,
     };
-    appendCommitLedger(seedstackDir, seed, dirtyPath, metadata);
-    return metadata;
   } catch (error) {
     runGit(["reset", "-q", "--", ...paths], true);
     stop(seedstackDir, iteration, "blocked", "auto_commit_failed", {
       seed,
       paths,
+      error: (error as Error).message,
+    });
+  }
+  if (!metadata) throw new Error("internal_error_missing_commit_metadata");
+  try {
+    appendCommitLedger(seedstackDir, seed, dirtyPath, metadata);
+    return metadata;
+  } catch (error) {
+    const recovery = writePerSeedCommitRecoveryArtifact(seedstackDir, iteration, seed, "commit_ledger_append", metadata, {
+      dirty_path: dirtyPath,
+      error: (error as Error).message,
+    });
+    emit(seedstackDir, "per_seed_commit_recovery", { seed, phase: "commit_ledger_append", commit: metadata.commit, recovery });
+    stop(seedstackDir, iteration, "blocked", "per_seed_commit_recovery_required", {
+      seed,
+      commit: metadata.commit,
+      recovery,
       error: (error as Error).message,
     });
   }
@@ -2573,7 +2669,21 @@ async function runLoop(): Promise<never> {
         });
       }
       const shouldApplyQueueOps = childResult.decision === "continue_other_seeds" || childResult.decision === "done";
+      const requireClosedCurrent = shouldApplyQueueOps && latestDispatchClosedClean(runState);
       const hasNonNoopProposal = proposedOps.some((proposal) => stringField(proposal.op_type) !== "no-op");
+      if (requireClosedCurrent && !hasCloseCurrentProposal(proposedOps, seed)) {
+        const invariant = writeCloseCurrentInvariantArtifact(seedstackDir, iteration, seed, "missing_close_current_proposal", {
+          decision: childResult.decision ?? null,
+          proposal_count: proposedOps.length,
+          op_types: proposedOps.map((proposal) => stringField(proposal.op_type) ?? "unknown"),
+          result_path: resultFile,
+        });
+        stop(seedstackDir, iteration, "blocked", "manage_missing_close_current_proposal", {
+          seed,
+          invariant,
+          manage_decision: childResult.decision ?? null,
+        });
+      }
       if (shouldApplyQueueOps) runRequiredKnowledgeCaptureAudit(seedstackDir, iteration, seed);
       if (shouldApplyQueueOps) {
         const queueOps = applyManageQueueOperations(seedstackDir, iteration, seed, preScan, reconcilePath, proposedOps);
@@ -2613,6 +2723,20 @@ async function runLoop(): Promise<never> {
       }
       const postScan = runScan(seedstackDir, iteration, `post-manage-scan-${seed}`);
       if (!ok(postScan)) stop(seedstackDir, iteration, "blocked", "scan_failed_after_manage", { seed, scan: latestArtifactPath(postScan) });
+      if (requireClosedCurrent && !scanProvesSeedClosed(postScan, seed)) {
+        const invariant = writeCloseCurrentInvariantArtifact(seedstackDir, iteration, seed, "post_queue_scan_seed_not_closed", {
+          decision: childResult.decision ?? null,
+          post_scan: latestArtifactPath(postScan),
+          issue: scanIssueById(postScan, seed),
+          closed_adopted: stringArray(postScan.closed_adopted),
+          open_adopted: stringArray(postScan.open_adopted),
+        });
+        stop(seedstackDir, iteration, "blocked", "manage_current_seed_not_closed", {
+          seed,
+          invariant,
+          scan: latestArtifactPath(postScan),
+        });
+      }
       const observedCreates = setDifference(scanListIds(postScan), scanListIds(preScan)).length;
       const adoptedGrowth = Math.max(0, adoptedCountFromManifest(optionsGlobal.adoptionSelection) - loopState.baseline_seed_count);
       const requested = Math.max(followupCount(childResult), observedCreates, adoptedGrowth - loopState.total_followups);
@@ -2778,18 +2902,32 @@ async function runLoop(): Promise<never> {
           head_after: commitMetadata.headAfter,
           changed_path_allowlist: commitMetadata.changedPathAllowlist,
         });
-        updateRunState(seedstackDir, iteration, "managing", [
-          "--seed",
-          seed,
-          "--decision",
-          "committed",
-          "--rationale",
-          `per-seed commit ${commitMetadata.commit} recorded`,
-          "--latest-dispatch-file",
-          committedPath,
-          "--commit",
-          commitMetadata.commit,
-        ]);
+        try {
+          updateRunState(seedstackDir, iteration, "managing", [
+            "--seed",
+            seed,
+            "--decision",
+            "committed",
+            "--rationale",
+            `per-seed commit ${commitMetadata.commit} recorded`,
+            "--latest-dispatch-file",
+            committedPath,
+            "--commit",
+            commitMetadata.commit,
+          ]);
+        } catch (error) {
+          const recovery = writePerSeedCommitRecoveryArtifact(seedstackDir, iteration, seed, "run_state_update", commitMetadata, {
+            latest_dispatch_file: committedPath,
+            error: (error as Error).message,
+          });
+          emit(seedstackDir, "per_seed_commit_recovery", { seed, phase: "run_state_update", commit: commitMetadata.commit, recovery });
+          stop(seedstackDir, iteration, "blocked", "per_seed_commit_recovery_required", {
+            seed,
+            commit: commitMetadata.commit,
+            recovery,
+            error: (error as Error).message,
+          });
+        }
         const ledger = runJson(seedstackDir, iteration, `commit-ledger-${seed}`, checkerPath("check-commit-ledger.ts"), [
           "--repo",
           optionsGlobal.repo,
@@ -3481,6 +3619,35 @@ else if (command === "close") {
   }
 }
 
+function runPerSeedCommitRecoverySelfTest(): void {
+  const root = mkdtempSync(join(tmpdir(), "seedstack-commit-recovery-"));
+  try {
+    const metadata: PerSeedCommitMetadata = {
+      commit: "abc123",
+      worktreeRoot: join(root, "repo"),
+      branch: "main",
+      headBefore: "def456",
+      headAfter: "abc123",
+      gitCommonDir: join(root, "repo", ".git"),
+      changedPathAllowlist: ["src/seed.txt", ".seeds/issues.jsonl"],
+    };
+    const recovery = writePerSeedCommitRecoveryArtifact(root, 7, "seed-recovery", "run_state_update", metadata, {
+      error: "fixture update failed",
+    });
+    const parsed = readJson(recovery);
+    assertSelfTest(isObject(parsed), "commit recovery artifact is object");
+    assertSelfTest(parsed.contract === "per_seed_commit_recovery.v1", "commit recovery artifact contract");
+    assertSelfTest(parsed.recoverable === true, "commit recovery artifact is recoverable");
+    assertSelfTest(parsed.commit === metadata.commit, "commit recovery artifact records commit");
+    assertSelfTest(parsed.run_state === statePath(root), "commit recovery artifact records run-state path");
+    const recoveryInfo = isObject(parsed.recovery) ? parsed.recovery : {};
+    const expected = isObject(recoveryInfo.expected_latest_dispatch) ? recoveryInfo.expected_latest_dispatch : {};
+    assertSelfTest(expected.commit_pending === false && expected.commit === metadata.commit, "commit recovery artifact records expected state");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function writeSupervisorFixtureCodex(path: string, sourceRepo: string): void {
   writeFileSync(
     path,
@@ -3578,6 +3745,11 @@ if (role === "dispatch") {
     "| " + roundRel + "/implement-a1-report.md | done |",
     "| " + roundRel + "/review-r1-a1.md | pass |",
     "| " + roundRel + "/verify-1.md | pass |",
+    "",
+    "## Gate Checks",
+    "| command | cwd | exit_code | status |",
+    "|---|---|---|---|",
+    "| bun test fixture | " + process.cwd() + " | 0 | pass |",
     "",
     "## Dirty Guard",
     "- command: git status --porcelain=v1 --untracked-files=all",
@@ -3906,6 +4078,7 @@ async function selfTest(pretty: boolean): Promise<never> {
   runLoopDirtyGuardPolicyFixtureSelfTest();
   runMissingResultRecoverySelfTest();
   runManageQueueOpsSelfTest();
+  runPerSeedCommitRecoverySelfTest();
   runLinkedWorktreeSupervisorFixtureSelfTest();
   const queueDirty = queueDirtyPathsFromStatus([
     " M .seeds/issues.jsonl",
@@ -4117,6 +4290,7 @@ async function selfTest(pretty: boolean): Promise<never> {
       "loop_dirty_guard_policy_fixture",
       "missing_result_recovery_fixture",
       "manage_queue_ops_fixture",
+      "per_seed_commit_recovery_fixture",
       "linked_worktree_supervisor_fixture",
     ],
   };

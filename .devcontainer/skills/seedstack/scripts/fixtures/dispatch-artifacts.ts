@@ -62,6 +62,12 @@ export function writeDispatchRound(options: DispatchRoundOptions): string {
     `| ${roundRoot}/review-report.md | pass |`,
     `| ${roundRoot}/verify-1.md | pass |`,
     "",
+    "## Gate Checks",
+    "",
+    "| command | cwd | exit_code | status |",
+    "| --- | --- | --- | --- |",
+    `| bun test fixture | ${options.repo} | 0 | pass |`,
+    "",
     "## Dirty Guard",
     "",
     ...(dirtyPaths.length > 0

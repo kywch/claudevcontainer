@@ -77,11 +77,26 @@ type GateAcceptedRow = {
   source: string;
 };
 
+type GateCommandRow = {
+  command?: string;
+  cwd?: string;
+  repoRoot?: string;
+  exitCode?: string;
+  status?: string;
+  result?: string;
+  required?: string;
+  live?: string;
+  waiver?: string;
+  source: string;
+};
+
 type GateRecord = {
   path: string;
+  text: string;
   decision?: string;
   acceptedPaths: string[];
   acceptedRows: GateAcceptedRow[];
+  commandRows: GateCommandRow[];
 };
 
 type DirtyGuardRecord = {
@@ -109,7 +124,7 @@ type Summary = {
   statuses: { checked: number; clean: number; dirty: number; hard_dirty?: number; soft_dirty?: number };
   artifactIndexes: { checked: number; rows: number };
   reports: { checked: number; execute: number; implement: number; review: number; verify: number };
-  gate?: { present: boolean; decision?: string; acceptedPaths: number };
+  gate?: { present: boolean; decision?: string; acceptedPaths: number; commandRows?: number };
 };
 
 type ValidationResult = {
@@ -393,7 +408,7 @@ export function validateDispatch(inputArgs: Args): ValidationResult {
   const gate = loadGate(effectiveArgs, seed, dispatchPath);
   if (gate) {
     summary.gatePath = gate.path;
-    summary.gate = { present: true, decision: gate.decision, acceptedPaths: gate.acceptedPaths.length };
+    summary.gate = { present: true, decision: gate.decision, acceptedPaths: gate.acceptedPaths.length, commandRows: gate.commandRows.length };
     validateGate(effectiveArgs, gate, reports, statuses, add);
   } else {
     summary.gate = { present: false, acceptedPaths: 0 };
@@ -1163,7 +1178,8 @@ function loadGate(args: Args, seed: string, dispatchPath: string): GateRecord | 
   const decision = /^\s*-?\s*decision\s*:\s*([A-Za-z_-]+)\s*$/im.exec(raw)?.[1]?.toLowerCase();
   const acceptedRows = parseGateAcceptedRows(raw);
   const acceptedPaths = acceptedRows.flatMap((row) => (row.path ? [row.path] : []));
-  return { path: gatePath, decision, acceptedPaths, acceptedRows };
+  const commandRows = parseGateCommandRows(raw);
+  return { path: gatePath, text: raw, decision, acceptedPaths, acceptedRows, commandRows };
 }
 
 function parseGateAcceptedRows(raw: string): GateAcceptedRow[] {
@@ -1217,6 +1233,52 @@ function gateEvidencePathHeader(headers: string[]): string | undefined {
   return headers.includes("path") ? "path" : undefined;
 }
 
+function parseGateCommandRows(raw: string): GateCommandRow[] {
+  const lines = raw.split(/\r?\n/);
+  const rows: GateCommandRow[] = [];
+
+  let inGateSection = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const heading = markdownHeadingTitle(lines[i]);
+    if (heading !== undefined) {
+      inGateSection =
+        /\b(gate checks?|gate results?|gates?|verification|checks?|results?)\b/i.test(heading) &&
+        !/\b(evidence paths?|non[-\s]?evidence|dirty guard|waivers?)\b/i.test(heading);
+      continue;
+    }
+    if (!inGateSection || !isMarkdownTableRow(lines[i])) continue;
+
+    const headers = splitTableRow(lines[i]).map(normalizeTableHeader);
+    if (!headers.includes("command")) continue;
+    if (i + 1 >= lines.length || !isMarkdownTableSeparator(lines[i + 1])) continue;
+
+    let j = i + 2;
+    for (; j < lines.length; j += 1) {
+      if (markdownHeadingTitle(lines[j]) !== undefined || !isMarkdownTableRow(lines[j])) break;
+      const cells = splitTableRow(lines[j]);
+      if (cells.length < headers.length) continue;
+      const row: Record<string, unknown> = {};
+      headers.forEach((header, index) => {
+        row[header] = cells[index];
+      });
+      rows.push({
+        command: stripOptional(stringValue(row.command)),
+        cwd: stripOptional(stringValue(row.cwd) ?? stringValue(row.working_dir) ?? stringValue(row.working_directory)),
+        repoRoot: stripOptional(stringValue(row.repo_root) ?? stringValue(row.repository_root)),
+        exitCode: stripOptional(stringValue(row.exit_code) ?? stringValue(row.exit) ?? stringValue(row.code)),
+        status: stripOptional(stringValue(row.status)),
+        result: stripOptional(stringValue(row.result) ?? stringValue(row.outcome) ?? stringValue(row.verdict) ?? stringValue(row.pass_fail_skip)),
+        required: stripOptional(stringValue(row.required)),
+        live: stripOptional(stringValue(row.live)),
+        waiver: stripOptional(stringValue(row.waiver) ?? stringValue(row.waiver_evidence) ?? stringValue(row.user_waiver)),
+        source: "gate",
+      });
+    }
+    i = j - 1;
+  }
+  return rows;
+}
+
 function markdownHeadingTitle(line: string): string | undefined {
   return /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/.exec(line)?.[1];
 }
@@ -1262,6 +1324,7 @@ function validateGate(
   if (gate.acceptedPaths.length === 0) {
     add("blocker", "gate_missing_evidence_paths", "gate done requires evidence artifact paths", gate.path);
   }
+  validateGateCommandEvidence(args, gate, add);
 
   const execute = reports.find((report) => report.role === "execute");
   const implement = reports.find((report) => report.role === "implement");
@@ -1282,11 +1345,113 @@ function validateGate(
     add("blocker", "gate_done_dirty_child", "gate done requires clean child status validation", gate.path);
   }
   validateGateKnowledgeCapture(args, gate.path, add);
-  const gateText = readFileSync(gate.path, "utf8");
+  const gateText = gate.text;
   if (!/dirty guard|dirty paths|known dirty/i.test(gateText)) {
     add("warning", "gate_missing_dirty_guard_text", "gate done should record dirty guard result", gate.path);
   }
   validateGateDirtyGuard(args, gate.path, gateText, add);
+}
+
+function validateGateCommandEvidence(
+  args: Args,
+  gate: GateRecord,
+  add: (level: Level, code: string, message: string, path?: string) => void,
+) {
+  if (gate.commandRows.length === 0) {
+    add("blocker", "gate_missing_command_evidence", "gate done requires gate command evidence with command, cwd/repo root, and exit status", gate.path);
+    return;
+  }
+
+  for (const row of gate.commandRows) {
+    const command = row.command?.trim() ?? "";
+    if (!command) {
+      add("blocker", "gate_command_missing_command", "gate command evidence row missing command", gate.path);
+    } else if (isMarkerOnlyGateCommand(command)) {
+      add("blocker", "gate_command_marker_only", `gate command evidence must record real command, got marker: ${command}`, gate.path);
+    }
+
+    if (!row.cwd && !row.repoRoot) {
+      add("blocker", "gate_command_missing_cwd", `gate command evidence missing cwd or repo root for command: ${command || "<missing>"}`, gate.path);
+    } else {
+      if (row.cwd) validateGateCommandLocation(args, row.cwd, "cwd", gate.path, add);
+      if (row.repoRoot) validateGateCommandLocation(args, row.repoRoot, "repo root", gate.path, add);
+    }
+
+    if (!hasGateCommandStatus(row)) {
+      add("blocker", "gate_command_missing_status", `gate command evidence missing exit code/status for command: ${command || "<missing>"}`, gate.path);
+    } else if (row.exitCode && !/^-?\d+$/.test(row.exitCode)) {
+      add("blocker", "gate_command_invalid_exit_code", `gate command evidence has nonnumeric exit code ${row.exitCode}`, gate.path);
+    }
+
+    if (isFailedRequiredGate(row) && !hasWaiverEvidence(gate.text, row)) {
+      add("blocker", "gate_failed_required_without_waiver", `failed required gate lacks user waiver evidence: ${command || "<missing>"}`, gate.path);
+    }
+    if (isSkippedRequiredOrLiveGate(row) && !hasWaiverEvidence(gate.text, row)) {
+      add("blocker", "gate_skipped_required_without_waiver", `skipped required/live gate lacks user waiver evidence: ${command || "<missing>"}`, gate.path);
+    }
+  }
+}
+
+function validateGateCommandLocation(
+  args: Args,
+  value: string,
+  label: "cwd" | "repo root",
+  gatePath: string,
+  add: (level: Level, code: string, message: string, path?: string) => void,
+) {
+  const stripped = stripCell(value);
+  if (!stripped) return;
+  if (isPlaceholderGateLocation(stripped)) {
+    add("blocker", "gate_command_placeholder_cwd", `gate command ${label} is placeholder: ${stripped}`, gatePath);
+    return;
+  }
+  const resolved = isAbsolute(stripped) ? resolve(stripped) : resolve(args.repo, stripped);
+  if (!isUnder(resolve(args.repo), resolved) && resolved !== resolve(args.repo)) {
+    add("blocker", "gate_command_cwd_outside_repo", `gate command ${label} outside repo: ${stripped}`, gatePath);
+    return;
+  }
+  if (!existsSync(resolved)) {
+    add("blocker", "gate_command_cwd_missing", `gate command ${label} does not exist: ${stripped}`, gatePath);
+    return;
+  }
+  if (!statSync(resolved).isDirectory()) {
+    add("blocker", "gate_command_cwd_not_directory", `gate command ${label} is not a directory: ${stripped}`, gatePath);
+  }
+}
+
+function isPlaceholderGateLocation(value: string): boolean {
+  return /^(?:none|n\/a|na|unknown|placeholder|<repo>|<cwd>)$/i.test(value.trim());
+}
+
+function hasGateCommandStatus(row: GateCommandRow): boolean {
+  return !!(row.exitCode || row.status);
+}
+
+function isMarkerOnlyGateCommand(command: string): boolean {
+  return /^(?:0|pass|passed|fail|failed|skip|skipped|done|close|closed|ok|n\/a|na|waived|verdict|result|status)$/i.test(command.trim());
+}
+
+function isSkippedRequiredOrLiveGate(row: GateCommandRow): boolean {
+  const combined = [row.result, row.status].filter(Boolean).join(" ");
+  if (!/\bskip(?:ped)?\b/i.test(combined)) return false;
+  return truthyGateFlag(row.required) || truthyGateFlag(row.live) || /\b(?:smoke[-_\s]?release|live)\b/i.test(row.command ?? "");
+}
+
+function isFailedRequiredGate(row: GateCommandRow): boolean {
+  const exitFailed = row.exitCode !== undefined && /^-?\d+$/.test(row.exitCode) && Number(row.exitCode) !== 0;
+  const combined = [row.result, row.status].filter(Boolean).join(" ");
+  const resultFailed = /\b(?:fail|failed|error|errored|nonzero|non-zero)\b/i.test(combined);
+  if (!exitFailed && !resultFailed) return false;
+  return truthyGateFlag(row.required) || truthyGateFlag(row.live) || /\b(?:smoke[-_\s]?release|live)\b/i.test(row.command ?? "");
+}
+
+function truthyGateFlag(value: string | undefined): boolean {
+  return !!value && /^(?:true|yes|required|live|1)$/i.test(value.trim());
+}
+
+function hasWaiverEvidence(gateText: string, row: GateCommandRow): boolean {
+  if (row.waiver && /\b(user[-\s]?waiv|waiv|approver|approved|boundary_deferred)\b/i.test(row.waiver)) return true;
+  return /\bwaivers?\b[\s\S]{0,800}\b(user[-\s]?waiv|approver|approved|boundary_deferred)\b/i.test(gateText);
 }
 
 function validateGateKnowledgeCapture(

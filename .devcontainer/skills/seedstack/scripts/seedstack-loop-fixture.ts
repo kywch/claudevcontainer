@@ -72,6 +72,7 @@ const DEFAULT_SCENARIOS = [
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "dispatch-escalated-resume.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "retry-same-seed.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "unsafe-continue-after-nonclosed.json"),
+  join(SEEDSTACK_DIR, "test", "loop-scenarios", "missing-close-current-proposal.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "per-seed-commit.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "per-seed-two-seeds.json"),
   join(SEEDSTACK_DIR, "test", "loop-scenarios", "ready-selection-manifest-order.json"),

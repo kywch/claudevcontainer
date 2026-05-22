@@ -96,6 +96,12 @@ export function makeFixtureRound(
         ]
       : ["No evidence paths recorded."]),
     "",
+    "## Gate Results",
+    "",
+    "| command | cwd | exit_code | result | required | live | waiver |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| bun skills/dispatch-work/scripts/validate-dispatch-work.ts --self-test | . | 0 | pass | yes | no | none |",
+    "",
     "## Dirty Guard",
     "",
     "Known dirty paths: none.",

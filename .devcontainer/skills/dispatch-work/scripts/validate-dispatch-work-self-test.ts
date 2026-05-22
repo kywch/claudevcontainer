@@ -149,9 +149,9 @@ export function runSelfTest(pretty: boolean): number {
         "",
         "## Gate Checks",
         "",
-        "| command | path | result |",
-        "| --- | --- | --- |",
-        "| bun skills/dispatch-work/scripts/validate-dispatch-work.ts --self-test | skills/dispatch-work/scripts/validate-dispatch-work.ts | pass |",
+        "| command | cwd | exit_code | result | required | live | waiver |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| bun skills/dispatch-work/scripts/validate-dispatch-work.ts --self-test | . | 0 | pass | yes | no | none |",
         "",
         "## Dirty Guard",
         "",
@@ -182,12 +182,18 @@ export function runSelfTest(pretty: boolean): number {
         "| --- | --- |",
         "| cd spec/conformance/runner && bun test | pass |",
         "",
+        "## Gate Results",
+        "| command | cwd | exit_code | result | required | live | waiver |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| bun test | . | 0 | pass | yes | no | none |",
+        "",
       ].join("\n"),
     );
     const nonEvidenceTable = validateDispatch({ ...parseArgs([]), repo: nonEvidenceTableRepo, seed });
 
     const evidenceAliasRepo = join(root, "evidence-alias-repo");
     makeFixtureRound(evidenceAliasRepo, seed, join(evidenceAliasRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    mkdirSync(join(evidenceAliasRepo, "spec/conformance/runner"), { recursive: true });
     writeFileSync(
       join(evidenceAliasRepo, "tmp/dispatch-work", seed, "gate.md"),
       [
@@ -202,13 +208,70 @@ export function runSelfTest(pretty: boolean): number {
         `| tmp/dispatch-work/${seed}/round-1/implement-a1-report.md | done |`,
         "",
         "## Gate Results",
-        "| command | path | outcome |",
-        "| --- | --- | --- |",
-        "| bun test | spec/conformance/runner | pass |",
+        "| command | cwd | exit_code | result | required | live | waiver |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| bun test | spec/conformance/runner | 0 | pass | yes | no | none |",
         "",
       ].join("\n"),
     );
     const evidenceAlias = validateDispatch({ ...parseArgs([]), repo: evidenceAliasRepo, seed });
+
+    const placeholderCwdRepo = join(root, "placeholder-cwd-repo");
+    makeFixtureRound(placeholderCwdRepo, seed, join(placeholderCwdRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const placeholderGatePath = join(placeholderCwdRepo, "tmp/dispatch-work", seed, "gate.md");
+    writeFileSync(
+      placeholderGatePath,
+      readFileSync(placeholderGatePath, "utf8").replace(
+        "| bun skills/dispatch-work/scripts/validate-dispatch-work.ts --self-test | . | 0 | pass | yes | no | none |",
+        "| bun skills/dispatch-work/scripts/validate-dispatch-work.ts --self-test | <cwd> | 0 | pass | yes | no | none |",
+      ),
+    );
+    const placeholderCwd = validateDispatch({ ...parseArgs([]), repo: placeholderCwdRepo, seed });
+
+    const nonexistentCwdRepo = join(root, "nonexistent-cwd-repo");
+    makeFixtureRound(nonexistentCwdRepo, seed, join(nonexistentCwdRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    const nonexistentGatePath = join(nonexistentCwdRepo, "tmp/dispatch-work", seed, "gate.md");
+    writeFileSync(
+      nonexistentGatePath,
+      readFileSync(nonexistentGatePath, "utf8").replace(
+        "| bun skills/dispatch-work/scripts/validate-dispatch-work.ts --self-test | . | 0 | pass | yes | no | none |",
+        "| bun skills/dispatch-work/scripts/validate-dispatch-work.ts --self-test | missing/subdir | 0 | pass | yes | no | none |",
+      ),
+    );
+    const nonexistentCwd = validateDispatch({ ...parseArgs([]), repo: nonexistentCwdRepo, seed });
+
+    const markerOnlyGateRepo = join(root, "marker-only-gate-repo");
+    makeFixtureRound(markerOnlyGateRepo, seed, join(markerOnlyGateRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(markerOnlyGateRepo, "tmp/dispatch-work", seed, "gate.md"),
+      readFileSync(join(markerOnlyGateRepo, "tmp/dispatch-work", seed, "gate.md"), "utf8").replace(
+        "| bun skills/dispatch-work/scripts/validate-dispatch-work.ts --self-test | . | 0 | pass | yes | no | none |",
+        "| pass | . | 0 | pass | yes | no | none |",
+      ),
+    );
+    const markerOnlyGate = validateDispatch({ ...parseArgs([]), repo: markerOnlyGateRepo, seed });
+
+    const skippedLiveGateRepo = join(root, "skipped-live-gate-repo");
+    makeFixtureRound(skippedLiveGateRepo, seed, join(skippedLiveGateRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(skippedLiveGateRepo, "tmp/dispatch-work", seed, "gate.md"),
+      readFileSync(join(skippedLiveGateRepo, "tmp/dispatch-work", seed, "gate.md"), "utf8").replace(
+        "| bun skills/dispatch-work/scripts/validate-dispatch-work.ts --self-test | . | 0 | pass | yes | no | none |",
+        "| ./scripts/smoke-release --live | . | 0 | skipped | yes | yes | none |",
+      ),
+    );
+    const skippedLiveGate = validateDispatch({ ...parseArgs([]), repo: skippedLiveGateRepo, seed });
+
+    const failedRequiredGateRepo = join(root, "failed-required-gate-repo");
+    makeFixtureRound(failedRequiredGateRepo, seed, join(failedRequiredGateRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writeFileSync(
+      join(failedRequiredGateRepo, "tmp/dispatch-work", seed, "gate.md"),
+      readFileSync(join(failedRequiredGateRepo, "tmp/dispatch-work", seed, "gate.md"), "utf8").replace(
+        "| bun skills/dispatch-work/scripts/validate-dispatch-work.ts --self-test | . | 0 | pass | yes | no | none |",
+        "| bun test | . | 1 | fail | yes | no | none |",
+      ),
+    );
+    const failedRequiredGate = validateDispatch({ ...parseArgs([]), repo: failedRequiredGateRepo, seed });
 
     const numberedReviewRepo = join(root, "numbered-review-repo");
     makeFixtureRound(numberedReviewRepo, seed, join(numberedReviewRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-1.md");
@@ -669,6 +732,11 @@ export function runSelfTest(pretty: boolean): number {
       { name: "gate checks table paths ignored after evidence table", pass: evidenceThenGateChecks.ok && evidenceThenGateChecks.summary.gate?.acceptedPaths === 4, blockers: evidenceThenGateChecks.blockers.length },
       { name: "non-evidence path table ignored", pass: nonEvidenceTable.ok && nonEvidenceTable.summary.gate?.acceptedPaths === 4, blockers: nonEvidenceTable.blockers.length },
       { name: "gate evidence artifact path alias passes", pass: evidenceAlias.ok && evidenceAlias.summary.gate?.acceptedPaths === 2, blockers: evidenceAlias.blockers.length },
+      { name: "placeholder gate cwd blocks", pass: !placeholderCwd.ok && placeholderCwd.blockers.some((finding) => finding.code === "gate_command_placeholder_cwd"), blockers: placeholderCwd.blockers.length },
+      { name: "nonexistent gate cwd blocks", pass: !nonexistentCwd.ok && nonexistentCwd.blockers.some((finding) => finding.code === "gate_command_cwd_missing"), blockers: nonexistentCwd.blockers.length },
+      { name: "marker-only gate command blocks close", pass: !markerOnlyGate.ok && markerOnlyGate.blockers.some((finding) => finding.code === "gate_command_marker_only"), blockers: markerOnlyGate.blockers.length },
+      { name: "skipped smoke-release live gate without waiver blocks close", pass: !skippedLiveGate.ok && skippedLiveGate.blockers.some((finding) => finding.code === "gate_skipped_required_without_waiver"), blockers: skippedLiveGate.blockers.length },
+      { name: "failed required gate without waiver blocks close", pass: !failedRequiredGate.ok && failedRequiredGate.blockers.some((finding) => finding.code === "gate_failed_required_without_waiver"), blockers: failedRequiredGate.blockers.length },
       { name: "numbered review report passes", pass: numberedReview.ok, blockers: numberedReview.blockers.length },
       { name: "stale report blocks", pass: !stale.ok && stale.blockers.some((finding) => finding.code === "stale_linked_report"), blockers: stale.blockers.length },
       { name: "loop policy stale report softens", pass: staleLoop.ok && (staleLoop.soft_blockers ?? []).some((finding) => finding.code === "stale_linked_report"), blockers: staleLoop.blockers.length },

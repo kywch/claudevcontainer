@@ -1,0 +1,47 @@
+{
+  "name": "missing-close-current-proposal",
+  "seed": "seed-fixture-0018",
+  "state": {
+    "dispatch": {
+      "decision": "closed"
+    },
+    "manage": {
+      "decision": "done",
+      "followups_requested": 0,
+      "followups_created": [],
+      "proposed_queue_operations": [
+        {
+          "op_type": "create-follow-up",
+          "target_seed": "seed-fixture-0018",
+          "rationale": "fixture intentionally omits close-current",
+          "source_artifact_refs": [
+            "."
+          ],
+          "expected_preconditions": [
+            "seed seed-fixture-0018 is still open"
+          ],
+          "details": {
+            "title": "Follow-up without closing current"
+          }
+        }
+      ]
+    }
+  },
+  "must_emit": [
+    {
+      "event": "manage_queue_proposals",
+      "fields": {
+        "seed": "seed-fixture-0018",
+        "count": 1,
+        "op_types": [
+          "create-follow-up"
+        ]
+      }
+    }
+  ],
+  "expected": {
+    "exit_code": 1,
+    "final_state": "blocked",
+    "reason": "manage_missing_close_current_proposal"
+  }
+}
