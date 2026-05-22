@@ -146,6 +146,16 @@ are not edit evidence. Actual changed repo paths from the dirty
 snapshot/status must fall under `repo_edit_roots`; out-of-scope prose mentions
 alone do not block.
 
+When `packet.md` includes optional evidence fields, validation enforces their
+downstream audit trail. `review_lenses: ["deslop"]` requires one Review prompt
+and one Review report naming `deslop`. `verify_lenses: ["thermo-nuclear"]`
+requires one Verify prompt and one Verify report naming `thermo-nuclear`.
+Each `testable_claims` entry must appear verbatim in a Verify prompt and must
+have Verify report evidence near that claim with
+`VERIFIED|NOT VERIFIED|INCONCLUSIVE`, `Evidence:`, and `Reasoning:`. These
+checks are blockers for local done; lens reports still use standard
+`pass|risk|block` verdicts and standard waiver rules.
+
 Child run validation also requires: status path exists, launch evidence path
 exists, prompt/log/report paths are repo-root-relative under
 `tmp/dispatch-work/<work-id>/`, report exists, report is nonempty and schema-valid,

@@ -1129,6 +1129,10 @@ export async function selfTest(pretty: boolean, fns: OrchestratorFns): Promise<n
   assertSelfTest(dispatchPrompt.includes("native agent-spawn tool (spawn_agent for Codex, Agent tool for Claude Code) only if it returns a real child id"), "dispatch prompt requires real spawn_agent id");
   assertSelfTest(dispatchPrompt.includes("Never fabricate liveness handles"), "dispatch prompt forbids fabricated liveness");
   assertSelfTest(dispatchPrompt.includes("not child_run_status evidence"), "dispatch prompt separates seedstack result from child status evidence");
+  assertSelfTest(dispatchPrompt.includes("Optional packet lens contract"), "dispatch prompt includes optional lens contract");
+  assertSelfTest(dispatchPrompt.includes('review_lenses: ["deslop"]'), "dispatch prompt preserves deslop lens instructions");
+  assertSelfTest(dispatchPrompt.includes('verify_lenses: ["thermo-nuclear"]'), "dispatch prompt preserves thermo-nuclear lens instructions");
+  assertSelfTest(dispatchPrompt.includes("verify-this baseline/treatment methodology"), "dispatch prompt preserves verify-this instructions");
   assertSelfTest(!dispatchPrompt.includes('"decision": "closed|blocked|escalated|crashed",'), "dispatch prompt avoids literal enum example");
   const managePrompt = buildManagePrompt({
     repo: "/repo",

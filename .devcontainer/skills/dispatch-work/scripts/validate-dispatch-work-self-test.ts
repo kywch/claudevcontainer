@@ -277,6 +277,40 @@ export function runSelfTest(pretty: boolean): number {
     makeFixtureRound(numberedReviewRepo, seed, join(numberedReviewRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true, "child_run_status.v2", undefined, "review-1.md");
     const numberedReview = validateDispatch({ ...parseArgs([]), repo: numberedReviewRepo, seed });
 
+    const packetObligationMissingRepo = join(root, "packet-obligation-missing-repo");
+    makeFixtureRound(packetObligationMissingRepo, seed, join(packetObligationMissingRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writePacketWithOptionalEvidence(packetObligationMissingRepo, seed);
+    const packetObligationMissing = validateDispatch({ ...parseArgs([]), repo: packetObligationMissingRepo, seed });
+
+    const packetObligationEvidenceRepo = join(root, "packet-obligation-evidence-repo");
+    makeFixtureRound(packetObligationEvidenceRepo, seed, join(packetObligationEvidenceRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
+    writePacketWithOptionalEvidence(packetObligationEvidenceRepo, seed);
+    appendFile(
+      join(packetObligationEvidenceRepo, "tmp/dispatch-work", seed, "round-1/review-r1-a1-prompt.md"),
+      "\nAssigned review_lenses: deslop.\n",
+    );
+    appendFile(
+      join(packetObligationEvidenceRepo, "tmp/dispatch-work", seed, "round-1/review-r1-a1.md"),
+      "\nLens evidence: deslop checklist inspected; no slop findings.\n",
+    );
+    appendFile(
+      join(packetObligationEvidenceRepo, "tmp/dispatch-work", seed, "round-1/verify-1-prompt.md"),
+      "\nAssigned verify_lenses: thermo-nuclear.\ntestable_claims:\n- fixture validator rejects missing optional evidence\n",
+    );
+    appendFile(
+      join(packetObligationEvidenceRepo, "tmp/dispatch-work", seed, "round-1/verify-1.md"),
+      [
+        "",
+        "Lens evidence: thermo-nuclear structural audit completed.",
+        "VERIFIED",
+        "Claim: fixture validator rejects missing optional evidence",
+        "Evidence: baseline=missing evidence fixture blocks, treatment=evidence fixture passes, delta=blocker removed, threshold=all packet obligations covered",
+        "Reasoning: Verify prompt assigned claim and report records per-claim verdict with concrete validator evidence.",
+        "",
+      ].join("\n"),
+    );
+    const packetObligationEvidence = validateDispatch({ ...parseArgs([]), repo: packetObligationEvidenceRepo, seed });
+
     const staleRepo = join(root, "stale-repo");
     makeFixtureRound(staleRepo, seed, join(staleRepo, "tmp/dispatch-work", seed, "round-1"), "pass", "close", true);
     const oldDate = new Date("2025-01-01T00:00:00Z");
@@ -738,6 +772,8 @@ export function runSelfTest(pretty: boolean): number {
       { name: "skipped smoke-release live gate without waiver blocks close", pass: !skippedLiveGate.ok && skippedLiveGate.blockers.some((finding) => finding.code === "gate_skipped_required_without_waiver"), blockers: skippedLiveGate.blockers.length },
       { name: "failed required gate without waiver blocks close", pass: !failedRequiredGate.ok && failedRequiredGate.blockers.some((finding) => finding.code === "gate_failed_required_without_waiver"), blockers: failedRequiredGate.blockers.length },
       { name: "numbered review report passes", pass: numberedReview.ok, blockers: numberedReview.blockers.length },
+      { name: "packet optional evidence missing blocks", pass: !packetObligationMissing.ok && packetObligationMissing.blockers.some((finding) => finding.code === "packet_review_lens_missing_prompt") && packetObligationMissing.blockers.some((finding) => finding.code === "packet_verify_lens_missing_report") && packetObligationMissing.blockers.some((finding) => finding.code === "packet_claim_missing_report"), blockers: packetObligationMissing.blockers.length },
+      { name: "packet optional evidence passes", pass: packetObligationEvidence.ok, blockers: packetObligationEvidence.blockers.length },
       { name: "stale report blocks", pass: !stale.ok && stale.blockers.some((finding) => finding.code === "stale_linked_report"), blockers: stale.blockers.length },
       { name: "loop policy stale report softens", pass: staleLoop.ok && (staleLoop.soft_blockers ?? []).some((finding) => finding.code === "stale_linked_report"), blockers: staleLoop.blockers.length },
       { name: "weak liveness handle blocks", pass: !weakLiveness.ok && weakLiveness.blockers.some((finding) => finding.code === "invalid_liveness_handle"), blockers: weakLiveness.blockers.length },
@@ -807,6 +843,25 @@ function setRepoEditRoots(repo: string, seed: string, roots: string) {
     const promptPath = join(repo, "tmp/dispatch-work", seed, "round-1", prompt);
     writeFileSync(promptPath, readFileSync(promptPath, "utf8").replace(/repo_edit_roots="[^"]*"/g, `repo_edit_roots="${roots}"`));
   }
+}
+
+function writePacketWithOptionalEvidence(repo: string, seed: string) {
+  writeFileSync(
+    join(repo, "tmp/dispatch-work", seed, "packet.md"),
+    [
+      "# Dispatch Packet",
+      "",
+      'review_lenses: ["deslop"]',
+      'verify_lenses: ["thermo-nuclear"]',
+      "testable_claims:",
+      "- fixture validator rejects missing optional evidence",
+      "",
+    ].join("\n"),
+  );
+}
+
+function appendFile(path: string, content: string) {
+  writeFileSync(path, `${readFileSync(path, "utf8")}${content}`);
 }
 
 function writeStructuredDirtyGuardGate(repo: string, seed: string, snapshotPath: string, actualImplPaths: string[], markdownLines?: string[]) {

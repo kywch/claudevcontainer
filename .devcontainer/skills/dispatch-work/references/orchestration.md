@@ -10,6 +10,17 @@
 
 Use 1 Research only for narrow docs-only seeds.
 
+When `review_lenses` includes `deslop`, assign that lens to one Review agent
+within the planned Review count. Add a Review agent only when the planned count
+cannot cover both required default review coverage and the lens. When
+`verify_lenses` includes `thermo-nuclear`, assign that lens to one Verify agent
+within the planned Verify count; add a Verify agent only when default Verify
+coverage would otherwise be displaced.
+
+Lens reports use the same `pass|risk|block` schema and the same done-gate
+rules as standard Review/Verify reports. A lens is extra required focus, not an
+advisory side channel or a waiver from validator preconditions.
+
 ## Launchers
 
 Codex environments use the native `spawn_agent` launcher for Implement, Review,
@@ -272,6 +283,11 @@ inspect that evidence.
   cleanup/hardening opportunities have been fixed or explicitly deferred with
   rationale, gates passed or have user waivers, and Execute `next_action`
   exists.
+- When `review_lenses` includes `deslop`, assign the deslop checklist as
+  required focus for one Review agent. That agent checks the branch diff for:
+  unnecessary comments, defensive checks abnormal for trusted paths, `any`
+  casts, deeply nested code, and patterns inconsistent with surrounding
+  codebase. Behavior must stay unchanged; prefer minimal edits.
 
 ## Verify Requirements
 
@@ -288,3 +304,14 @@ inspect that evidence.
   reports or explicit user waivers. Dispatch-work never closes queue records.
 - Before stage transitions, Dispatcher or Execute verifies required artifacts
   for current stage exist and are nonempty.
+- When `verify_lenses` includes `thermo-nuclear`, assign the thermo-nuclear
+  checklist as the focus for one Verify agent. That agent applies the
+  Non-Negotiable Standards and Approval Bar: flag file-size explosions past
+  1k lines, spaghetti-growth conditionals, missed code-judo simplifications,
+  unnecessary abstractions, wrapper/cast/optionality churn, and wrong-layer
+  logic as blocking or risk.
+- When packet `testable_claims` is non-empty, at least one Verify prompt must
+  carry each claim verbatim and one Verify report must record a per-claim
+  `VERIFIED|NOT VERIFIED|INCONCLUSIVE` verdict with `Claim:`, `Evidence:`,
+  and `Reasoning:` fields. Inconclusive results require explanation but do not
+  force block.

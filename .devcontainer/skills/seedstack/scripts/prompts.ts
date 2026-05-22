@@ -80,6 +80,14 @@ ${VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE.trimEnd()}
 - Do not write literal combined enum text for decision; choose one value.
 - For non-closed decisions, omit round_path and set blocked_reason when useful.
 
+Optional packet lens contract:
+- If the work order requests review_lenses, verify_lenses, or testable_claims, copy those fields into packet.md exactly.
+- If you infer review_lenses, verify_lenses, or testable_claims during packet construction, record the reason in packet.md.
+- If packet.md includes review_lenses: ["deslop"], at least one Review prompt must include the exact deslop checklist from prompt-contracts.md and the Review report must state the deslop lens was applied.
+- If packet.md includes verify_lenses: ["thermo-nuclear"], at least one Verify prompt must include the exact thermo-nuclear checklist from prompt-contracts.md and the Verify report must state the thermo-nuclear lens was applied.
+- If packet.md includes non-empty testable_claims, at least one Verify prompt must include the exact claim list and the verify-this baseline/treatment methodology from prompt-contracts.md; the Verify report must include per-claim VERIFIED, NOT VERIFIED, or INCONCLUSIVE evidence.
+- Do not close when packet-requested lens or testable-claim evidence is missing from child prompts or reports. Retry bounded prompt/report repair instead.
+
 Required round-1 artifacts (the dispatch-work validator checks for all of these):
 - Round dir: ${dispatchRoot(seed)}/round-1/
 - Executor report: ${dispatchRoot(seed)}/round-1/executor-report.md (must contain Verdict: and Recommendation:)
@@ -97,6 +105,7 @@ Required report marker lines for a clean close:
 - Implement Outcome: done: implement-a1-report.md must contain exact parseable line \`Outcome: done\`.
 - Review Verdict: pass: review-r1-a1.md must contain exact parseable line \`Verdict: pass\`.
 - Verify Verdict: pass: verify-1.md must contain exact parseable line \`Verdict: pass\`.
+- Every additional Review or Verify report produced for packet lenses must also contain exact parseable line \`Verdict: pass\` before close.
 - Every role report must start with a Summary block containing these keys in this order: status, changed_files, tests, blockers, next_action.
 - For close/done, report Summary next_action must be close or done.
 

@@ -108,6 +108,13 @@ type DirtyGuardRecord = {
   snapshot_path: string;
 };
 
+type PacketOptions = {
+  path: string;
+  reviewLenses: string[];
+  verifyLenses: string[];
+  testableClaims: string[];
+};
+
 type ArtifactLocation = {
   resolved: string;
   repoPath: string;
@@ -404,6 +411,7 @@ export function validateDispatch(inputArgs: Args): ValidationResult {
   validateRequiredRoleReports(reports, add, roundPath);
   validateRoleArtifacts(effectiveArgs, statuses, reports, add, roundPath);
   validateExecuteCompatibility(reports, add);
+  validatePacketObligations(dispatchPath, files, reports, add);
 
   const gate = loadGate(effectiveArgs, seed, dispatchPath);
   if (gate) {
@@ -597,6 +605,15 @@ function parseAllowedSeedEditRoots(description: string): string[] {
 }
 
 function parseAreaField(description: string, field: "area" | "support_area"): string[] {
+  const listMatch = new RegExp(`^\\s*${field}:\\s*$\\n((?:\\s+-\\s+.+\\n?)+)`, "m").exec(description);
+  if (listMatch) {
+    return listMatch[1]
+      .split(/\r?\n/)
+      .map((line) => /^\s+-\s+(.+?)\s*$/.exec(line)?.[1] ?? "")
+      .flatMap((value) => value.split(/[+;,|]/))
+      .map(normalizeArea)
+      .filter(Boolean);
+  }
   const match = new RegExp(`^\\s*${field}:\\s*(.+?)\\s*$`, "m").exec(description);
   if (!match) return [];
   return match[1]
@@ -654,6 +671,11 @@ function validateActualRepoEditPaths(
 
 function collectRepoEditRoots(args: Args, dispatchPath: string, roundFiles: string[]): string[] {
   const roots = new Set<string>();
+  if (args.seed) {
+    for (const root of allowedSeedEditRoots(args.repo, args.seed)) {
+      roots.add(root);
+    }
+  }
   const topLevelDispatchFiles = existsSync(dispatchPath)
     ? readdirSync(dispatchPath, { withFileTypes: true })
       .filter((entry) => entry.isFile() && /\.(md|txt)$/.test(entry.name))
@@ -1168,6 +1190,125 @@ function validateRoleArtifacts(
       }
     }
   }
+}
+
+function validatePacketObligations(
+  dispatchPath: string,
+  roundFiles: string[],
+  reports: ReportRecord[],
+  add: (level: Level, code: string, message: string, path?: string) => void,
+) {
+  const packet = loadPacketOptions(dispatchPath);
+  if (!packet) return;
+
+  const reviewPrompts = roundFiles.filter((file) => artifactBaseName(file).startsWith("review-") && artifactBaseName(file).endsWith("-prompt.md"));
+  const verifyPrompts = roundFiles.filter((file) => artifactBaseName(file).startsWith("verify-") && artifactBaseName(file).endsWith("-prompt.md"));
+  const reviewReports = reports.filter((report) => report.role === "review").map((report) => report.path);
+  const verifyReports = reports.filter((report) => report.role === "verify").map((report) => report.path);
+
+  for (const lens of packet.reviewLenses) {
+    if (!["deslop"].includes(lens)) continue;
+    if (!someArtifactMentions(reviewPrompts, lens)) {
+      add("blocker", "packet_review_lens_missing_prompt", `packet review_lenses includes ${lens}, but no Review prompt assigns that lens`, packet.path);
+    }
+    if (!someArtifactMentions(reviewReports, lens)) {
+      add("blocker", "packet_review_lens_missing_report", `packet review_lenses includes ${lens}, but no Review report records that lens evidence`, packet.path);
+    }
+  }
+
+  for (const lens of packet.verifyLenses) {
+    if (!["thermo-nuclear"].includes(lens)) continue;
+    if (!someArtifactMentions(verifyPrompts, lens)) {
+      add("blocker", "packet_verify_lens_missing_prompt", `packet verify_lenses includes ${lens}, but no Verify prompt assigns that lens`, packet.path);
+    }
+    if (!someArtifactMentions(verifyReports, lens)) {
+      add("blocker", "packet_verify_lens_missing_report", `packet verify_lenses includes ${lens}, but no Verify report records that lens evidence`, packet.path);
+    }
+  }
+
+  for (const claim of packet.testableClaims) {
+    if (!someArtifactMentions(verifyPrompts, claim)) {
+      add("blocker", "packet_claim_missing_prompt", `packet testable_claims entry is not present in any Verify prompt: ${claim}`, packet.path);
+    }
+    if (!someVerifyReportCoversClaim(verifyReports, claim)) {
+      add("blocker", "packet_claim_missing_report", `packet testable_claims entry lacks Verify report verdict/evidence/reasoning: ${claim}`, packet.path);
+    }
+  }
+}
+
+function loadPacketOptions(dispatchPath: string): PacketOptions | undefined {
+  const packetPath = join(dispatchPath, BASENAMES.packet);
+  if (!existsSync(packetPath)) return undefined;
+  const stats = statSync(packetPath);
+  if (stats.size === 0 || stats.size > 1024 * 1024) return { path: packetPath, reviewLenses: [], verifyLenses: [], testableClaims: [] };
+  const raw = readFileSync(packetPath, "utf8");
+  return {
+    path: packetPath,
+    reviewLenses: parsePacketList(raw, "review_lenses").map(normalizeLensName),
+    verifyLenses: parsePacketList(raw, "verify_lenses").map(normalizeLensName),
+    testableClaims: parsePacketList(raw, "testable_claims").map((claim) => claim.trim()).filter(Boolean),
+  };
+}
+
+function parsePacketList(raw: string, field: string): string[] {
+  const block = new RegExp(`^\\s*${field}\\s*:\\s*$\\n((?:\\s*-\\s+.+\\n?)+)`, "im").exec(raw);
+  if (block) {
+    return block[1]
+      .split(/\r?\n/)
+      .map((line) => /^\s*-\s+(.+?)\s*$/.exec(line)?.[1] ?? "")
+      .map(stripPacketScalar)
+      .filter(Boolean);
+  }
+
+  const inline = new RegExp(`^\\s*${field}\\s*:\\s*(.+?)\\s*$`, "im").exec(raw);
+  if (!inline) return [];
+  const value = inline[1].trim();
+  if (/^\[\s*\]\s*$/.test(value)) return [];
+  const inner = value.replace(/^\[/, "").replace(/\]$/, "");
+  return inner.split(",").map(stripPacketScalar).filter(Boolean);
+}
+
+function stripPacketScalar(value: string): string {
+  return value.trim().replace(/^["'`]|["'`]$/g, "").trim();
+}
+
+function normalizeLensName(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function artifactBaseName(file: string): string {
+  return file.split(sep).pop() ?? "";
+}
+
+function someArtifactMentions(files: string[], needle: string): boolean {
+  const normalizedNeedle = normalizeEvidenceText(needle);
+  if (!normalizedNeedle) return true;
+  return files.some((file) => {
+    if (!existsSync(file)) return false;
+    const stats = statSync(file);
+    if (stats.size === 0 || stats.size > 1024 * 1024) return false;
+    return normalizeEvidenceText(readFileSync(file, "utf8")).includes(normalizedNeedle);
+  });
+}
+
+function someVerifyReportCoversClaim(files: string[], claim: string): boolean {
+  const normalizedClaim = normalizeEvidenceText(claim);
+  if (!normalizedClaim) return true;
+  return files.some((file) => {
+    if (!existsSync(file)) return false;
+    const stats = statSync(file);
+    if (stats.size === 0 || stats.size > 1024 * 1024) return false;
+    const raw = readFileSync(file, "utf8");
+    const normalized = normalizeEvidenceText(raw);
+    const claimIndex = normalized.indexOf(normalizedClaim);
+    if (claimIndex < 0) return false;
+    const window = normalized.slice(Math.max(0, claimIndex - 250), claimIndex + normalizedClaim.length + 500);
+    return /\b(verified|not verified|inconclusive)\b/.test(window) && /\bevidence\s*:/.test(window) && /\breasoning\s*:/.test(window);
+  });
+}
+
+function normalizeEvidenceText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function loadGate(args: Args, seed: string, dispatchPath: string): GateRecord | undefined {

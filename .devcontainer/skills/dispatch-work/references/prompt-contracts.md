@@ -49,8 +49,94 @@ dispatch paths.
 | Research | `research-<i>` | root-level role artifact, no child run metadata unless spawned | `research-<i>.md` | focus, source precedence, requested outputs, source-hint candidate section |
 | Execute | `execute` | `execute-prompt.md`, `execute.log`, `execute.status`, `execute-launch-evidence.json` | `executor-report.md` | round id, artifact dir, source hints path, nested access check, launch descriptor, exact Implement prompt, exact Review prompt, scope evidence, gate-output drift check |
 | Implement | `implement-a<m>` | `implement-a<m>-prompt.md`, `implement-a<m>.log`, `implement-a<m>.status`, `implement-a<m>-launch-evidence.json` | `implement-a<m>-report.md` | edit scope, non-goals, dirty paths, gates with cwd/env, criteria, source hints path, no edits after Review starts |
-| Review | `review-r<i>-a<m>` | `review-r<i>-a<m>-prompt.md`, `review-r<i>-a<m>.log`, `review-r<i>-a<m>.status`, `review-r<i>-a<m>-launch-evidence.json` | `review-r<i>-a<m>.md` | changed-file list or diff summary, criteria checklist, gates to inspect, focus/lens, source hints path, no peer findings |
-| Verify | `verify-<i>` | `verify-<i>-prompt.md`, `verify-<i>.log`, `verify-<i>.status`, `verify-<i>-launch-evidence.json` | `verify-<i>.md` | Execute report path, all round artifacts, diff summary, gate outputs, waiver rules, focus, source hints path, no peer findings |
+| Review | `review-r<i>-a<m>` | `review-r<i>-a<m>-prompt.md`, `review-r<i>-a<m>.log`, `review-r<i>-a<m>.status`, `review-r<i>-a<m>-launch-evidence.json` | `review-r<i>-a<m>.md` | changed-file list or diff summary, criteria checklist, gates to inspect, focus/lens, source hints path, no peer findings, review_lenses from packet |
+| Verify | `verify-<i>` | `verify-<i>-prompt.md`, `verify-<i>.log`, `verify-<i>.status`, `verify-<i>-launch-evidence.json` | `verify-<i>.md` | Execute report path, all round artifacts, diff summary, gate outputs, waiver rules, focus, source hints path, no peer findings, verify_lenses from packet, testable_claims from packet |
+
+## Optional Review Lenses
+
+### deslop
+
+When `packet.md` includes `review_lenses: ["deslop"]`, assign one Review
+agent the deslop lens. That agent's prompt adds:
+
+> Check the branch diff against main for AI-generated slop:
+>
+> - Extra comments unnecessary or inconsistent with local style
+> - Defensive checks or try/catch abnormal for trusted code paths
+> - Casts to `any` used only to bypass type issues
+> - Deeply nested code that should use early returns
+> - Other patterns inconsistent with the file and surrounding codebase
+>
+> Keep behavior unchanged unless fixing a clear bug. Prefer minimal,
+> focused edits over broad rewrites. Report findings using standard Review
+> report schema (pass/risk/block). Keep summary concise (1-3 sentences).
+
+The deslop lens does not replace default Review coverage. Assign it to one
+Review agent within the planned Review count unless that would displace
+required behavior/spec or tests/invariant review coverage. The prompt must name
+`deslop`; the Review report must record deslop evidence. Standard Review report
+schema and done-gate rules apply.
+
+## Optional Verify Lenses
+
+### thermo-nuclear
+
+When `packet.md` includes `verify_lenses: ["thermo-nuclear"]`, assign one
+Verify agent the thermo-nuclear lens. That agent's prompt adds:
+
+> Run an extremely strict maintainability audit on the branch diff.
+> Look for "code judo" moves: restructurings that preserve behavior while
+> making the implementation dramatically simpler.
+>
+> Non-negotiable checks:
+> - File crossing 1000 lines due to this work
+> - New ad-hoc conditionals bolted onto unrelated code paths
+> - One-off booleans, nullable modes, or flags complicating control flow
+> - Feature-specific logic leaking into general-purpose modules
+> - Thin wrappers or identity abstractions adding indirection without clarity
+> - Unnecessary casts, `any`, `unknown`, or optional params muddying contracts
+> - Copy-pasted logic instead of extracted helpers
+> - Bespoke helpers where the codebase already has a canonical utility
+> - Logic in the wrong layer/package
+>
+> Approval bar: no structural regression, no missed dramatic simplification,
+> no unjustified file-size explosion, no spaghetti-growth from special-case
+> branching, no unnecessary wrapper/cast/optionality churn.
+>
+> Prioritize: structural regressions > missed simplification > spaghetti >
+> boundary/type problems > file-size > modularity > legibility.
+> Prefer fewer high-conviction findings over many cosmetic nits.
+
+The thermo-nuclear lens does not replace standard Verify checks. It augments
+one Verify agent's focus within the planned Verify count unless that would
+displace required standard verification coverage. The prompt must name
+`thermo-nuclear`; the Verify report must record thermo-nuclear evidence.
+Standard Verify report schema and done-gate rules apply.
+
+## Verify-This Methodology
+
+When `packet.md` includes a non-empty `testable_claims` list, at least one
+Verify prompt must carry each claim verbatim, and one Verify report must apply
+baseline/treatment comparison for each claim:
+
+1. Restate in falsifiable form: condition, metric, threshold.
+2. Capture baseline from merge-base or parent commit.
+3. Capture treatment from current working tree with same command/env.
+4. Compare raw artifacts and return per-claim verdict.
+
+Evidence inline in verify report:
+
+```text
+VERIFIED | NOT VERIFIED | INCONCLUSIVE
+Claim: <falsifiable claim>
+Evidence: baseline=<...>, treatment=<...>, delta=<...>, threshold=<...>
+Reasoning: <one paragraph naming evidence and confounds>
+```
+
+When no testable claims exist or baseline capture is impractical (pure
+new-file additions), Verify falls back to standard artifact/report
+inspection. `INCONCLUSIVE` does not auto-block; Verify still issues its
+own `pass|risk|block` using all evidence.
 
 Prompt construction order is fixed: `path_manifest`, contracts, then task text.
 `io_policy`, `launch_provenance`, and `child_artifact_contract` path attributes,

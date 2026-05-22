@@ -66,6 +66,24 @@ user. Do not let likely-file guesses replace an explicit `area`.
 - non-goals, risks, and review focus
 - draft and refined scope budget: estimated changed LOC, file count, subsystem
   count, context risk, split recommendation when over budget
+- optional `review_lenses` list: named lenses for Review agents beyond the
+  default behavior/spec and tests/invariants split. Recognized names:
+  `deslop`. Set by user in work order or inferred by Dispatcher when
+  Implement used AI-assisted generation. A listed lens is required Review
+  focus: corresponding Review prompt and report evidence must name the lens.
+- optional `verify_lenses` list: named lenses for Verify agents beyond
+  standard checks. Recognized names: `thermo-nuclear`. Set by user in work
+  order or inferred by Dispatcher for high-risk or large-diff work. A listed
+  lens is required Verify focus: corresponding Verify prompt and report
+  evidence must name the lens.
+- optional `testable_claims` list: falsifiable claims from work order or
+  acceptance criteria that assert measurable behavior change (performance,
+  correctness, before/after). Each entry is a short falsifiable statement.
+  Empty when no claims are testable. Dispatcher populates from acceptance
+  criteria during packet construction. Each listed claim must appear verbatim
+  in a Verify prompt and must have Verify report evidence using
+  `VERIFIED|NOT VERIFIED|INCONCLUSIVE`, `Claim:`, `Evidence:`, and
+  `Reasoning:`.
 
 ## Promotion Boundaries
 

@@ -75,6 +75,12 @@ current boundary quote, manage classification artifact, later owner work order i
 carry-forward gate, prohibited-risk check, final proof path. Skip for normal
 dispatches.
 
+Findings from optional lenses (`deslop`, `thermo-nuclear`) and verify-this
+verdicts follow the same waiver rules as standard Review/Verify findings.
+They do not introduce separate gate categories. A `NOT VERIFIED` claim from
+verify-this is treated as a `risk` finding; Dispatcher records it in
+`gate.md` and applies standard risk waiver rules.
+
 Spec/protocol version bumps are promotion work. Dispatch may recommend a bump
 when behavior is normative, but may not apply the bump unless the current work
 explicitly owns promotion or the user confirms it during dispatch. For
