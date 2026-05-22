@@ -5,19 +5,13 @@
 // one dispatch or manage step, then enforces the outer state machine with the
 // existing deterministic Seedstack checkers.
 
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
-  DEFAULT_CHILD_SILENT_PROBE_MS,
-  DEFAULT_CHILD_SILENT_TIMEOUT_MS,
-  DEFAULT_CHILD_TOTAL_TIMEOUT_MS,
   followupCount,
   readChildResult,
   runChild,
-  runChildTimeoutSelfTest,
   type ChildExit,
   type ChildResult,
   type ChildRole,
@@ -34,679 +28,98 @@ import {
   childFailureCapsulePath,
   allocateRecoveryAttempt,
   recoveryAttemptDir,
-  recoveryScanPath,
-  recoveryValidationPath,
   commitLedgerPath,
   dashboardPath,
   stopAfterSeedPath,
   iterationArtifactPath,
   iterationResultPath,
 } from "./seedstack-paths.ts";
-import { preflightRepo, type WorktreeMetadata, type WorktreePolicy } from "./worktree-preflight.ts";
-import { writeDispatchRound } from "./fixtures/dispatch-artifacts.ts";
+import type { WorktreeMetadata } from "./worktree-preflight.ts";
+
+// ── Re-exports from modules ─────────────────────────────────────────────────
+
 import {
-  KNOWLEDGE_RECORD_TYPES,
-  VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE,
-  validateKnowledgeCaptureText,
-} from "../../dispatch-work/scripts/knowledge-capture-validation.ts";
+  type JsonObject,
+  type RunStateName,
+  type Options,
+  type EventRecord,
+  type LoopState,
+  type QueueOperation,
+  type QueueOperationCommand,
+  type PerSeedCommitMetadata,
+  type SeedTiming,
+  SCRIPT_DIR,
+  DISPATCH_SEED_DIR,
+  readJson,
+  writeJson,
+  isObject,
+  stringField,
+  numberField,
+  stringArray,
+  pathEntries,
+  unexpectedPaths,
+  markdownCell,
+} from "./seedstack-loop/types.ts";
 
-type JsonObject = Record<string, unknown>;
-type RunStateName = "idle" | "dispatching" | "managing" | "done" | "exhausted" | "blocked" | "escalated" | "loop_cap";
+import {
+  parseArgs,
+  ensureInputs,
+  persistedRepoFromRunState,
+} from "./seedstack-loop/cli.ts";
 
-type Options = {
-  repo: string;
-  originalRepo: string;
-  worktreePolicy: WorktreePolicy;
-  requireWorktree: boolean;
-  worktree: WorktreeMetadata;
-  seedstackDir?: string;
-  adoptionSelection?: string;
-  seedCli: string;
-  mode: "auto" | "manual";
-  commitPolicy: "none" | "per_seed";
-  commitPolicyExplicit: boolean;
-  knowledgeCapture: "off" | "audit" | "record";
-  knowledgeRequired: boolean;
-  codexBin: string;
-  codexReasoningEffort: "low" | "medium" | "high" | "xhigh";
-  runner: "codex" | "claude";
-  claudeBin: string;
-  claudeModel: string;
-  followupCap: number;
-  followupsPerManage: number;
-  maxIterations: number;
-  boundaryHealth: "off" | "warn" | "block";
-  maxSeedTarget: number;
-  hotFile: number;
-  splitCandidate: number;
-  pollMs: number;
-  postSeedDelayMs: number;
-  childTotalTimeoutMs: number;
-  childSilentTimeoutMs: number;
-  childSilentProbeMs: number;
-  pretty: boolean;
-  selfTest: boolean;
-};
+import {
+  knowledgeCapturePath as knowledgeCapturePathFn,
+  knowledgeStorePath as knowledgeStorePathFn,
+  knowledgeStoreLineCount,
+  knowledgeStoreGitState,
+  baseKnowledgeCaptureCheck,
+  recordKnowledgeCandidates,
+  knowledgeCaptureBlocksRequired,
+} from "./seedstack-loop/knowledge-capture.ts";
 
-type EventRecord = JsonObject & {
-  ts: string;
-  event: string;
-};
+import {
+  queueDirtyPathsFromStatus,
+  queueDirtyPaths as queueDirtyPathsFn,
+  proposedQueueOperations,
+  normalizeQueueOperation,
+  scanIssueById,
+  validateQueueOperationPreconditions,
+  buildQueueOperationArgv,
+  runQueueOperationCommand,
+  applyManageQueueOperations as applyManageQueueOperationsFn,
+} from "./seedstack-loop/queue-operations.ts";
 
-type LoopState = {
-  contract: "seedstack_loop_state.v1";
-  loop_iteration: number;
-  scan_epoch: number;
-  manage_epoch: number;
-  total_followups: number;
-  baseline_seed_count: number;
-  skipped_seeds: Array<{ seed: string; reason: string; at: string; loop_cap?: string }>;
-};
+import {
+  selfTest as selfTestFn,
+} from "./seedstack-loop/self-tests.ts";
 
-type QueueOperation = {
-  op_type: string;
-  target_seed: string;
-  rationale: string;
-  source_artifact_refs: string[];
-  expected_preconditions: string[];
-  details: JsonObject;
-  index: number;
-};
+// ── Module-level mutable state ───────────────────────────────────────────────
 
-type QueueOperationCommand = {
-  op_type: string;
-  target_seed: string;
-  argv: string[];
-  cwd: string;
-  exit_code: number | null;
-  stdout: string;
-  stderr: string;
-};
+let optionsGlobal: Options & { seedstackDir: string; adoptionSelection: string };
 
-const HELP = `seedstack-loop.ts seedstack_loop.v1
+// ── Dashboard state ──────────────────────────────────────────────────────────
 
-Usage:
-  bun skills/seedstack/scripts/seedstack-loop.ts --seedstack-dir <dir> --adoption-selection <json> [args]
-  bun skills/seedstack/scripts/seedstack-loop.ts --self-test [--pretty]
+let dashboardTimings: SeedTiming[] = [];
+let dashboardLoopStartedAt = 0;
+let dashboardPhaseStartedAt = 0;
+let dashboardCurrentSeed: string | null = null;
+let dashboardCurrentPhase: "idle" | "dispatch" | "manage" | "commit" | "scan" = "idle";
+let dashboardIteration = 0;
+let dashboardState = "idle";
+let dashboardCurrentTiming: SeedTiming | null = null;
 
-Args:
-  --repo <path>                    Repo root. Default: cwd.
-  --worktree-policy <linked-ok|allow-same-branch>
-                                    Default: linked-ok. Accept linked worktrees but block same-branch duplicates.
-  --allow-same-branch-worktree      Alias for --worktree-policy allow-same-branch.
-  --require-worktree                Require --repo to resolve to a linked git worktree.
-  --seedstack-dir <path>           Stack artifact dir containing run-state.json.
-  --adoption-selection <path>      Active adoption manifest.
-  --seed-cli <path>                work queue CLI. Default: sd.
-  --mode <auto|manual>             Default: auto.
-  --commit-policy <none|per_seed>   Default: per_seed in auto, none in manual.
-  --knowledge-capture <off|audit|record>
-                                    Knowledge capture policy before clean-close queue mutations. Default: audit.
-  --knowledge-required              Block when knowledge capture check fails.
-  --codex-bin <path>               Codex binary for child steps. Default: codex.
-  --codex-reasoning-effort <level> Codex reasoning effort for child steps.
-                                    Values: low, medium, high, xhigh. Default: medium.
-  --runner <codex|claude>          Child runner backend. Default: codex.
-  --claude-bin <path>              Claude CLI binary. Default: claude.
-  --claude-model <model>           Claude model string. Default: claude-sonnet-4-6.
-  --followup-cap <n>               Total manager-created follow-up cap. Default: 5.
-  --followups-per-manage <n>       Per-manage follow-up cap. Default: 2.
-  --max-iterations <n>             Supervisor iteration cap. Default: 50.
-  --boundary-health <off|warn|block>
-                                    Boundary checker policy. Default: warn.
-  --max-seed-target <n>            Boundary warning target. Default: 600.
-  --hot-file <n>                   Hot-file warning target. Default: 800.
-  --split-candidate <n>            Boundary blocking target. Default: 1200.
-  --poll-ms <n>                    Child heartbeat interval. Default: 30000.
-  --post-seed-delay-ms <n>         Delay after each seed before selecting the next. Default: 10000.
-  --child-total-timeout-ms <n>     Hard child runtime cap. Default: 3600000.
-  --child-silent-timeout-ms <n>    Child no-output watchdog. Default: 1200000.
-  --child-silent-probe-ms <n>      Silent watchdog probe interval. Default: 600000.
-  --pretty                         Pretty-print final JSON.
-  --self-test                      Run lightweight self-test.
-  --help                           Show this help.
-`;
+// ── Wrapper functions that close over optionsGlobal ─────────────────────────
 
-const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-const SEEDSTACK_DIR = dirname(SCRIPT_DIR);
-const WORKSPACE_ROOT = resolve(SCRIPT_DIR, "../../../..");
-const DISPATCH_SEED_DIR = resolve(SEEDSTACK_DIR, "..", "dispatch-work");
-const KNOWLEDGE_STORE_SCRIPT = "/workspace/.devcontainer/skills/capture-knowledge/knowledge-store.ts";
-
-function usage(exitCode: 0 | 2): never {
-  (exitCode === 0 ? process.stdout : process.stderr).write(HELP);
-  process.exit(exitCode);
+function knowledgeCapturePath(seed: string): string {
+  return knowledgeCapturePathFn(optionsGlobal.repo, seed);
 }
 
-function take(args: string[], index: number, flag: string): string {
-  const value = args[index + 1];
-  if (!value || value.startsWith("--")) throw new Error(`${flag} requires value`);
-  return value;
-}
-
-function parsePositive(value: string, flag: string): number {
-  if (!/^\d+$/.test(value)) throw new Error(`${flag} must be a positive integer`);
-  const parsed = Number(value);
-  if (parsed <= 0) throw new Error(`${flag} must be positive`);
-  return parsed;
-}
-
-function parseNonNegative(value: string, flag: string): number {
-  if (!/^\d+$/.test(value)) throw new Error(`${flag} must be a non-negative integer`);
-  return Number(value);
-}
-
-function parseReasoningEffort(value: string): Options["codexReasoningEffort"] {
-  if (value === "low" || value === "medium" || value === "high" || value === "xhigh") return value;
-  throw new Error("--codex-reasoning-effort must be low, medium, high, or xhigh");
-}
-
-function parseArgs(argv: string[]): Options {
-  const options: Options = {
-    repo: process.cwd(),
-    originalRepo: process.cwd(),
-    worktreePolicy: "linked-ok",
-    requireWorktree: false,
-    worktree: {
-      original_repo_input: process.cwd(),
-      original_repo_path: process.cwd(),
-      repo: process.cwd(),
-      git_common_dir: null,
-      git_dir: null,
-      worktree_root: null,
-      branch: null,
-      head: null,
-      linked: false,
-      policy: "linked-ok",
-      require_worktree: false,
-    },
-    seedCli: "sd",
-    mode: "auto",
-    commitPolicy: "none",
-    commitPolicyExplicit: false,
-    knowledgeCapture: "audit",
-    knowledgeRequired: false,
-    codexBin: "codex",
-    codexReasoningEffort: "medium",
-    runner: "codex",
-    claudeBin: "claude",
-    claudeModel: "claude-sonnet-4-6",
-    followupCap: 5,
-    followupsPerManage: 2,
-    maxIterations: 50,
-    boundaryHealth: "warn",
-    maxSeedTarget: 600,
-    hotFile: 800,
-    splitCandidate: 1200,
-    pollMs: 30000,
-    postSeedDelayMs: 10000,
-    childTotalTimeoutMs: DEFAULT_CHILD_TOTAL_TIMEOUT_MS,
-    childSilentTimeoutMs: DEFAULT_CHILD_SILENT_TIMEOUT_MS,
-    childSilentProbeMs: DEFAULT_CHILD_SILENT_PROBE_MS,
-    pretty: false,
-    selfTest: false,
-  };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--help":
-      case "-h":
-        usage(0);
-      case "--pretty":
-        options.pretty = true;
-        break;
-      case "--self-test":
-        options.selfTest = true;
-        break;
-      case "--repo":
-        options.repo = take(argv, index, arg);
-        index += 1;
-        break;
-      case "--worktree-policy": {
-        const policy = take(argv, index, arg);
-        if (policy !== "linked-ok" && policy !== "allow-same-branch") {
-          throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
-        }
-        options.worktreePolicy = policy;
-        index += 1;
-        break;
-      }
-      case "--allow-same-branch-worktree":
-        options.worktreePolicy = "allow-same-branch";
-        break;
-      case "--require-worktree":
-        options.requireWorktree = true;
-        break;
-      case "--seedstack-dir":
-        options.seedstackDir = take(argv, index, arg);
-        index += 1;
-        break;
-      case "--adoption-selection":
-        options.adoptionSelection = take(argv, index, arg);
-        index += 1;
-        break;
-      case "--seed-cli":
-        options.seedCli = take(argv, index, arg);
-        index += 1;
-        break;
-      case "--mode": {
-        const mode = take(argv, index, arg);
-        if (mode !== "auto" && mode !== "manual") throw new Error("--mode must be auto or manual");
-        options.mode = mode;
-        index += 1;
-        break;
-      }
-      case "--commit-policy": {
-        const policy = take(argv, index, arg);
-        if (policy !== "none" && policy !== "per_seed") {
-          throw new Error("--commit-policy must be none or per_seed");
-        }
-        options.commitPolicy = policy;
-        options.commitPolicyExplicit = true;
-        index += 1;
-        break;
-      }
-      case "--knowledge-capture": {
-        const policy = take(argv, index, arg);
-        if (policy !== "off" && policy !== "audit" && policy !== "record") {
-          throw new Error("--knowledge-capture must be off, audit, or record");
-        }
-        options.knowledgeCapture = policy;
-        index += 1;
-        break;
-      }
-      case "--knowledge-required":
-        options.knowledgeRequired = true;
-        break;
-      case "--codex-bin":
-        options.codexBin = take(argv, index, arg);
-        index += 1;
-        break;
-      case "--codex-reasoning-effort":
-        options.codexReasoningEffort = parseReasoningEffort(take(argv, index, arg));
-        index += 1;
-        break;
-      case "--runner": {
-        const r = take(argv, index, arg);
-        if (r !== "codex" && r !== "claude") throw new Error("--runner must be codex or claude");
-        options.runner = r;
-        index += 1;
-        break;
-      }
-      case "--claude-bin":
-        options.claudeBin = take(argv, index, arg);
-        index += 1;
-        break;
-      case "--claude-model":
-        options.claudeModel = take(argv, index, arg);
-        index += 1;
-        break;
-      case "--followup-cap":
-        options.followupCap = parsePositive(take(argv, index, arg), arg);
-        index += 1;
-        break;
-      case "--followups-per-manage":
-        options.followupsPerManage = parsePositive(take(argv, index, arg), arg);
-        index += 1;
-        break;
-      case "--max-iterations":
-        options.maxIterations = parsePositive(take(argv, index, arg), arg);
-        index += 1;
-        break;
-      case "--boundary-health": {
-        const policy = take(argv, index, arg);
-        if (policy !== "off" && policy !== "warn" && policy !== "block") {
-          throw new Error("--boundary-health must be off, warn, or block");
-        }
-        options.boundaryHealth = policy;
-        index += 1;
-        break;
-      }
-      case "--max-seed-target":
-        options.maxSeedTarget = parsePositive(take(argv, index, arg), arg);
-        index += 1;
-        break;
-      case "--hot-file":
-        options.hotFile = parsePositive(take(argv, index, arg), arg);
-        index += 1;
-        break;
-      case "--split-candidate":
-        options.splitCandidate = parsePositive(take(argv, index, arg), arg);
-        index += 1;
-        break;
-      case "--poll-ms":
-        options.pollMs = parsePositive(take(argv, index, arg), arg);
-        index += 1;
-        break;
-      case "--post-seed-delay-ms":
-        options.postSeedDelayMs = parseNonNegative(take(argv, index, arg), arg);
-        index += 1;
-        break;
-      case "--child-total-timeout-ms":
-        options.childTotalTimeoutMs = parsePositive(take(argv, index, arg), arg);
-        index += 1;
-        break;
-      case "--child-silent-timeout-ms":
-        options.childSilentTimeoutMs = parsePositive(take(argv, index, arg), arg);
-        index += 1;
-        break;
-      case "--child-silent-probe-ms":
-        options.childSilentProbeMs = parsePositive(take(argv, index, arg), arg);
-        index += 1;
-        break;
-      default:
-        if (arg.startsWith("--repo=")) options.repo = arg.slice("--repo=".length);
-        else if (arg.startsWith("--worktree-policy=")) {
-          const policy = arg.slice("--worktree-policy=".length);
-          if (policy !== "linked-ok" && policy !== "allow-same-branch") {
-            throw new Error("--worktree-policy must be linked-ok or allow-same-branch");
-          }
-          options.worktreePolicy = policy;
-        }
-        else if (arg.startsWith("--seedstack-dir=")) options.seedstackDir = arg.slice("--seedstack-dir=".length);
-        else if (arg.startsWith("--adoption-selection=")) options.adoptionSelection = arg.slice("--adoption-selection=".length);
-        else if (arg.startsWith("--seed-cli=")) options.seedCli = arg.slice("--seed-cli=".length);
-        else if (arg.startsWith("--commit-policy=")) {
-          const policy = arg.slice("--commit-policy=".length);
-          if (policy !== "none" && policy !== "per_seed") {
-            throw new Error("--commit-policy must be none or per_seed");
-          }
-          options.commitPolicy = policy;
-          options.commitPolicyExplicit = true;
-        }
-        else if (arg.startsWith("--knowledge-capture=")) {
-          const policy = arg.slice("--knowledge-capture=".length);
-          if (policy !== "off" && policy !== "audit" && policy !== "record") {
-            throw new Error("--knowledge-capture must be off, audit, or record");
-          }
-          options.knowledgeCapture = policy;
-        }
-        else if (arg.startsWith("--codex-bin=")) options.codexBin = arg.slice("--codex-bin=".length);
-        else if (arg.startsWith("--codex-reasoning-effort=")) {
-          options.codexReasoningEffort = parseReasoningEffort(arg.slice("--codex-reasoning-effort=".length));
-        }
-        else if (arg.startsWith("--runner=")) {
-          const r = arg.slice("--runner=".length);
-          if (r !== "codex" && r !== "claude") throw new Error("--runner must be codex or claude");
-          options.runner = r as "codex" | "claude";
-        }
-        else if (arg.startsWith("--claude-bin=")) options.claudeBin = arg.slice("--claude-bin=".length);
-        else if (arg.startsWith("--claude-model=")) options.claudeModel = arg.slice("--claude-model=".length);
-        else if (arg.startsWith("--followup-cap=")) options.followupCap = parsePositive(arg.slice("--followup-cap=".length), "--followup-cap");
-        else if (arg.startsWith("--followups-per-manage=")) {
-          options.followupsPerManage = parsePositive(arg.slice("--followups-per-manage=".length), "--followups-per-manage");
-        } else if (arg.startsWith("--max-iterations=")) {
-          options.maxIterations = parsePositive(arg.slice("--max-iterations=".length), "--max-iterations");
-        } else if (arg.startsWith("--boundary-health=")) {
-          const policy = arg.slice("--boundary-health=".length);
-          if (policy !== "off" && policy !== "warn" && policy !== "block") {
-            throw new Error("--boundary-health must be off, warn, or block");
-          }
-          options.boundaryHealth = policy;
-        } else if (arg.startsWith("--max-seed-target=")) {
-          options.maxSeedTarget = parsePositive(arg.slice("--max-seed-target=".length), "--max-seed-target");
-        } else if (arg.startsWith("--hot-file=")) {
-          options.hotFile = parsePositive(arg.slice("--hot-file=".length), "--hot-file");
-        } else if (arg.startsWith("--split-candidate=")) {
-          options.splitCandidate = parsePositive(arg.slice("--split-candidate=".length), "--split-candidate");
-        } else if (arg.startsWith("--poll-ms=")) options.pollMs = parsePositive(arg.slice("--poll-ms=".length), "--poll-ms");
-        else if (arg.startsWith("--post-seed-delay-ms=")) {
-          options.postSeedDelayMs = parseNonNegative(arg.slice("--post-seed-delay-ms=".length), "--post-seed-delay-ms");
-        }
-        else if (arg.startsWith("--child-total-timeout-ms=")) {
-          options.childTotalTimeoutMs = parsePositive(arg.slice("--child-total-timeout-ms=".length), "--child-total-timeout-ms");
-        } else if (arg.startsWith("--child-silent-timeout-ms=")) {
-          options.childSilentTimeoutMs = parsePositive(arg.slice("--child-silent-timeout-ms=".length), "--child-silent-timeout-ms");
-        } else if (arg.startsWith("--child-silent-probe-ms=")) {
-          options.childSilentProbeMs = parsePositive(arg.slice("--child-silent-probe-ms=".length), "--child-silent-probe-ms");
-        }
-        else throw new Error(`unknown argument ${arg}`);
-    }
-  }
-
-  const callerCwd = process.cwd();
-  const originalRepo = options.repo;
-  if (options.seedstackDir) options.seedstackDir = resolve(callerCwd, options.seedstackDir);
-  if (options.adoptionSelection) options.adoptionSelection = resolve(callerCwd, options.adoptionSelection);
-  const persistedRepo = persistedRepoFromRunState(options.seedstackDir);
-  const preflight = preflightRepo({
-    repoInput: persistedRepo ?? originalRepo,
-    cwd: callerCwd,
-    policy: options.worktreePolicy,
-    requireWorktree: options.requireWorktree,
-  });
-  options.originalRepo = originalRepo;
-  options.repo = preflight.repo;
-  options.worktree = {
-    ...preflight.metadata,
-    original_repo_input: originalRepo,
-    original_repo_path: resolve(callerCwd, originalRepo),
-  };
-  if (options.mode === "auto" && !options.commitPolicyExplicit) options.commitPolicy = "per_seed";
-  if (options.maxSeedTarget >= options.splitCandidate) {
-    throw new Error("--max-seed-target must be lower than --split-candidate");
-  }
-  options.childSilentProbeMs = Math.min(options.childSilentProbeMs, options.childSilentTimeoutMs);
-  return options;
-}
-
-function readJson(path: string): unknown {
-  return JSON.parse(readFileSync(path, "utf8")) as unknown;
-}
-
-function persistedRepoFromRunState(seedstackDir: string | undefined): string | null {
-  if (!seedstackDir) return null;
-  const path = statePath(seedstackDir);
-  if (!existsSync(path)) return null;
-  try {
-    const raw = readJson(path);
-    if (!isObject(raw)) return null;
-    const repo = stringField(raw.repo);
-    return repo && isAbsolute(repo) ? repo : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function isObject(value: unknown): value is JsonObject {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function stringField(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function numberField(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
-
-function exactStringArray(value: unknown): string[] | null {
-  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : null;
-}
-
-function pathEntries(value: unknown): Array<{ path: string; classification: string }> {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isObject).flatMap((item) => {
-    const path = stringField(item.path);
-    const classification = stringField(item.classification);
-    return path && classification ? [{ path, classification }] : [];
-  });
-}
-
-function unexpectedPaths(result: JsonObject): string[] {
-  const direct = stringArray(result.unexpected_paths);
-  if (direct.length > 0) return direct;
-  return pathEntries(result.paths)
-    .filter((item) => item.classification === "unexpected")
-    .map((item) => item.path);
-}
-
-function queueDirtyPathsFromStatus(statusText: string): string[] {
-  const paths = new Set<string>();
-  for (const rawLine of statusText.split(/\r?\n/)) {
-    if (!rawLine || rawLine.length < 4 || rawLine[2] !== " ") continue;
-    const pathPart = rawLine.slice(3);
-    const candidates = pathPart.includes(" -> ") ? pathPart.split(" -> ") : [pathPart];
-    for (const candidate of candidates) {
-      const path = candidate.replace(/^"|"$/g, "").replace(/\\/g, "/");
-      if (path.startsWith(".seeds/") && path !== ".seeds/knowledge.jsonl") paths.add(path);
-    }
-  }
-  return [...paths].sort();
+function knowledgeStorePath(): string {
+  return knowledgeStorePathFn(optionsGlobal.repo);
 }
 
 function queueDirtyPaths(): string[] {
-  const proc = spawnSync("git", ["status", "--porcelain=v1", "--untracked-files=all", "--", ".seeds"], {
-    cwd: optionsGlobal.repo,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-  });
-  if (proc.status !== 0) {
-    throw new Error(`queue_dirty_preflight_git_status_failed: ${(proc.stderr || "").trim() || "git status failed"}`);
-  }
-  return queueDirtyPathsFromStatus(proc.stdout);
-}
-
-function proposedQueueOperations(result: ChildResult): JsonObject[] {
-  return Array.isArray(result.proposed_queue_operations) ? result.proposed_queue_operations.filter(isObject) : [];
-}
-
-function normalizeQueueOperation(value: JsonObject, index: number): QueueOperation | { error: string; detail?: unknown } {
-  const opType = stringField(value.op_type);
-  const targetSeed = stringField(value.target_seed);
-  const rationale = stringField(value.rationale);
-  if (!opType) return { error: "missing_op_type", detail: value };
-  if (!targetSeed) return { error: "missing_target_seed", detail: value };
-  if (!rationale) return { error: "missing_rationale", detail: value };
-  const sourceArtifactRefs = exactStringArray(value.source_artifact_refs);
-  if (!sourceArtifactRefs) return { error: "invalid_source_artifact_refs", detail: value.source_artifact_refs };
-  const expectedPreconditions = exactStringArray(value.expected_preconditions);
-  if (!expectedPreconditions) return { error: "invalid_expected_preconditions", detail: value.expected_preconditions };
-  return {
-    op_type: opType,
-    target_seed: targetSeed,
-    rationale,
-    source_artifact_refs: sourceArtifactRefs,
-    expected_preconditions: expectedPreconditions,
-    details: isObject(value.details) ? value.details : {},
-    index,
-  };
-}
-
-function scanIssueById(scan: JsonObject, id: string): JsonObject | null {
-  const issues = Array.isArray(scan.issues) ? scan.issues : [];
-  for (const issue of issues) {
-    if (isObject(issue) && issue.id === id) return issue;
-  }
-  return null;
-}
-
-function validateQueueOperationPreconditions(op: QueueOperation, seed: string, preScan: JsonObject, reconcilePath: string): { blockers: string[]; warnings: string[] } {
-  const blockers: string[] = [];
-  const warnings: string[] = [];
-  const supported = new Set(["close-current", "create-follow-up", "add-dependency", "adjust-labels", "no-op"]);
-  if (!supported.has(op.op_type)) blockers.push(`unsupported operation ${op.op_type}`);
-  const target = op.op_type === "create-follow-up" ? null : scanIssueById(preScan, op.target_seed);
-  if (op.op_type === "close-current" && op.target_seed !== seed) {
-    blockers.push(`close-current target ${op.target_seed} is not current seed ${seed}`);
-  }
-  if (op.op_type === "close-current" && target && stringField(target.status) === "closed") {
-    blockers.push(`close-current target ${op.target_seed} is closed in fresh scan`);
-  }
-  if (op.op_type === "close-current" && target && stringField(target.status) !== "open") {
-    blockers.push(`close-current target ${op.target_seed} is not open in fresh scan`);
-  }
-  if (op.op_type !== "create-follow-up" && !target) {
-    if (!target) blockers.push(`target seed ${op.target_seed} not present in fresh scan`);
-  }
-  for (const ref of op.source_artifact_refs) {
-    const absolute = isAbsolute(ref) ? ref : resolve(optionsGlobal.repo, ref);
-    if (!existsSync(absolute)) blockers.push(`source artifact missing: ${ref}`);
-  }
-  for (const precondition of op.expected_preconditions) {
-    const lower = precondition.toLowerCase();
-    if (lower.includes("still open")) {
-      const match = /\bseed\s+([A-Za-z0-9._-]+)\s+is\s+still\s+open\b/i.exec(precondition);
-      const targetId = match?.[1] ?? op.target_seed;
-      const target = scanIssueById(preScan, targetId);
-      if (!target) blockers.push(`precondition target ${targetId} missing from fresh scan`);
-      else if (stringField(target.status) === "closed") blockers.push(`precondition target ${targetId} is closed`);
-    } else if (lower.includes("dispatch reconcile result") || lower.includes("reconcile")) {
-      if (!existsSync(reconcilePath)) blockers.push(`reconcile artifact missing: ${reconcilePath}`);
-    } else {
-      warnings.push(`unsupported precondition treated as advisory: ${precondition}`);
-    }
-  }
-  return { blockers, warnings };
-}
-
-function buildQueueOperationArgv(op: QueueOperation): string[] | { error: string } {
-  switch (op.op_type) {
-    case "no-op":
-      return [];
-    case "close-current":
-      return [optionsGlobal.seedCli, "close", op.target_seed, "--json"];
-    case "create-follow-up": {
-      const title = stringField(op.details.title);
-      if (!title) return { error: "create-follow-up requires details.title" };
-      const argv = [optionsGlobal.seedCli, "create", "--title", title, "--type", stringField(op.details.type) ?? "task"];
-      if (typeof op.details.priority === "number" && Number.isFinite(op.details.priority)) {
-        argv.push("--priority", String(op.details.priority));
-      }
-      const labels = stringArray(op.details.labels);
-      if (labels.length > 0) argv.push("--labels", labels.join(","));
-      const description = stringField(op.details.description) ?? stringField(op.details.body);
-      if (description) argv.push("--description", description);
-      argv.push("--json");
-      return argv;
-    }
-    case "add-dependency": {
-      const dependsOn = stringField(op.details.depends_on) ?? stringField(op.details.dependency) ?? stringField(op.details.blocked_by);
-      if (!dependsOn) return { error: "add-dependency requires details.depends_on" };
-      return [optionsGlobal.seedCli, "dep", "add", op.target_seed, dependsOn, "--json"];
-    }
-    case "adjust-labels": {
-      const add = stringArray(op.details.add);
-      const remove = stringArray(op.details.remove);
-      if (add.length === 0 && remove.length === 0) return { error: "adjust-labels requires details.add or details.remove" };
-      const argv = [optionsGlobal.seedCli, "update", op.target_seed];
-      for (const label of add) argv.push("--add-label", label);
-      for (const label of remove) argv.push("--remove-label", label);
-      argv.push("--json");
-      return argv;
-    }
-    default:
-      return { error: `unsupported operation ${op.op_type}` };
-  }
-}
-
-function runQueueOperationCommand(op: QueueOperation, argv: string[]): QueueOperationCommand {
-  if (argv.length === 0) {
-    return { op_type: op.op_type, target_seed: op.target_seed, argv, cwd: optionsGlobal.repo, exit_code: 0, stdout: "", stderr: "" };
-  }
-  const proc: SpawnSyncReturns<string> = spawnSync(argv[0], argv.slice(1), {
-    cwd: optionsGlobal.repo,
-    encoding: "utf8",
-    maxBuffer: 10 * 1024 * 1024,
-  });
-  return {
-    op_type: op.op_type,
-    target_seed: op.target_seed,
-    argv,
-    cwd: optionsGlobal.repo,
-    exit_code: proc.status,
-    stdout: (proc.stdout || "").trim(),
-    stderr: (proc.stderr || proc.error?.message || "").trim(),
-  };
+  return queueDirtyPathsFn(optionsGlobal.repo);
 }
 
 function applyManageQueueOperations(
@@ -717,88 +130,14 @@ function applyManageQueueOperations(
   reconcilePath: string,
   proposals: JsonObject[],
 ): JsonObject {
-  const preApplyScan = runScan(seedstackDir, iteration, `pre-apply-queue-scan-${seed}`);
-  if (!ok(preApplyScan)) {
-    return {
-      contract: "manage_queue_operations.v1",
-      ok: false,
-      seed,
-      proposal_count: proposals.length,
-      applied_count: 0,
-      blockers: ["fresh queue scan failed before applying proposed operations"],
-      warnings: [],
-      before_seed_ids: [],
-      after_seed_ids: [],
-      queue_dirty_paths: queueDirtyPaths(),
-      planned_commands: [],
-      commands: [],
-      scans: {
-        child_pre_manage_scan: latestArtifactPath(childPreScan),
-        pre_apply_scan: latestArtifactPath(preApplyScan),
-      },
-    };
-  }
-  const normalized: QueueOperation[] = [];
-  const blockers: string[] = [];
-  const warnings: string[] = [];
-  proposals.forEach((proposal, index) => {
-    const op = normalizeQueueOperation(proposal, index);
-    if ("error" in op) {
-      blockers.push(`proposal ${index}: ${op.error}`);
-      return;
-    }
-    normalized.push(op);
-    const validation = validateQueueOperationPreconditions(op, seed, preApplyScan, reconcilePath);
-    blockers.push(...validation.blockers.map((item) => `proposal ${index}: ${item}`));
-    warnings.push(...validation.warnings.map((item) => `proposal ${index}: ${item}`));
-  });
-  const beforeIds = scanListIds(preApplyScan);
-  const commands: QueueOperationCommand[] = [];
-  const plannedArgv: Array<{ op_type: string; target_seed: string; argv: string[] }> = [];
-  for (const op of normalized) {
-    const argv = buildQueueOperationArgv(op);
-    if ("error" in argv) blockers.push(`proposal ${op.index}: ${argv.error}`);
-    else plannedArgv.push({ op_type: op.op_type, target_seed: op.target_seed, argv });
-  }
-  const mutatingCommands = plannedArgv.filter((command) => command.argv.length > 0);
-  if (mutatingCommands.length > 1) {
-    blockers.push("multiple mutating queue operations are not applied in one manage step; split proposals to avoid partial queue mutation");
-  }
-  if (blockers.length === 0) {
-    for (let index = 0; index < normalized.length; index += 1) {
-      const op = normalized[index];
-      const argv = plannedArgv[index]?.argv ?? [];
-      const command = runQueueOperationCommand(op, argv);
-      commands.push(command);
-      if (command.exit_code !== 0) {
-        blockers.push(`proposal ${op.index}: seed-cli command failed exit=${command.exit_code}`);
-        break;
-      }
-    }
-  }
-  const queueDirty = queueDirtyPaths();
-  const afterScan = blockers.length === 0 || commands.length > 0 ? runScan(seedstackDir, iteration, `post-queue-ops-scan-${seed}`) : null;
-  return {
-    contract: "manage_queue_operations.v1",
-    ok: blockers.length === 0,
-    seed,
-    proposal_count: proposals.length,
-    applied_count: commands.length,
-    partial_applied: blockers.length > 0 && commands.length > 0,
-    blockers,
-    warnings,
-    before_seed_ids: beforeIds,
-    after_seed_ids: afterScan ? scanListIds(afterScan) : beforeIds,
-    queue_dirty_paths: queueDirty,
-    planned_commands: plannedArgv,
-    commands,
-    scans: {
-      child_pre_manage_scan: latestArtifactPath(childPreScan),
-      pre_apply_scan: latestArtifactPath(preApplyScan),
-      ...(afterScan ? { post_apply_scan: latestArtifactPath(afterScan) } : {}),
-    },
-  };
+  return applyManageQueueOperationsFn(
+    seedstackDir, iteration, seed, childPreScan, reconcilePath, proposals,
+    optionsGlobal.repo, optionsGlobal.seedCli,
+    runScan, ok, latestArtifactPath, scanListIds,
+  );
 }
+
+// ── Orchestrator functions ───────────────────────────────────────────────────
 
 function beforeFirstDispatch(runState: JsonObject): boolean {
   if ((numberField(runState.loop_iteration) ?? 0) > 0) return false;
@@ -854,6 +193,12 @@ function parseGateExpectedSeedPaths(text: string): string[] {
       if (isExpectedSeedPath(path)) paths.add(path);
     }
   }
+  for (const arrayMatch of text.matchAll(/"actual_impl_paths"\s*:\s*\[([\s\S]*?)\]/g)) {
+    for (const pathMatch of arrayMatch[1].matchAll(/"([^"]+)"/g)) {
+      const path = cleanExpectedSeedPath(pathMatch[1]?.trim() ?? "");
+      if (isExpectedSeedPath(path)) paths.add(path);
+    }
+  }
   return [...paths];
 }
 
@@ -897,14 +242,6 @@ function reconcileArtifactPath(runState: JsonObject, seed: string): string | nul
   const stateReconciliation = isObject(runState.reconciliation) ? runState.reconciliation : {};
   if (stringField(stateReconciliation.seed) === seed) return stringField(stateReconciliation.path);
   return null;
-}
-
-function ensureInputs(options: Options): asserts options is Options & { seedstackDir: string; adoptionSelection: string } {
-  if (!options.seedstackDir) throw new Error("--seedstack-dir required");
-  if (!options.adoptionSelection) throw new Error("--adoption-selection required");
-  if (options.followupsPerManage > options.followupCap) {
-    throw new Error("--followups-per-manage cannot exceed --followup-cap");
-  }
 }
 
 // statePath, loopStatePath, eventsPath, loopDir — imported from seedstack-paths.ts
@@ -1138,26 +475,7 @@ function runJson(seedstackDir: string, iteration: number, label: string, script:
   return { ...parsed, __path: outPath };
 }
 
-let optionsGlobal: Options & { seedstackDir: string; adoptionSelection: string };
-
-// ── Dashboard state ──────────────────────────────────────────────────────────
-type SeedTiming = {
-  seed: string;
-  result: "ok" | "skipped" | "failed";
-  dispatch_ms?: number;
-  manage_ms?: number;
-  commit_ms?: number;
-  reason?: string;
-};
-
-let dashboardTimings: SeedTiming[] = [];
-let dashboardLoopStartedAt = 0;
-let dashboardPhaseStartedAt = 0;
-let dashboardCurrentSeed: string | null = null;
-let dashboardCurrentPhase: "idle" | "dispatch" | "manage" | "commit" | "scan" = "idle";
-let dashboardIteration = 0;
-let dashboardState = "idle";
-let dashboardCurrentTiming: SeedTiming | null = null;
+// ── Dashboard rendering ──────────────────────────────────────────────────────
 
 function fmtDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -1322,325 +640,6 @@ function commitCandidatePaths(dirty: JsonObject): string[] {
     .sort();
 }
 
-function knowledgeCapturePath(seed: string): string {
-  return join(optionsGlobal.repo, "tmp", "dispatch-work", seed, "knowledge-capture.md");
-}
-
-function knowledgeStorePath(): string {
-  return join(optionsGlobal.repo, ".seeds", "knowledge.jsonl");
-}
-
-function knowledgeStoreLineCount(path: string): { valid: boolean; count: number; error?: string } {
-  if (!existsSync(path)) return { valid: true, count: 0 };
-  const lines = readFileSync(path, "utf8").split(/\r?\n/).filter((line) => line.trim().length > 0);
-  try {
-    for (const line of lines) JSON.parse(line) as unknown;
-    return { valid: true, count: lines.length };
-  } catch (error) {
-    return { valid: false, count: lines.length, error: (error as Error).message };
-  }
-}
-
-function knowledgeStoreGitState(): { dirty: boolean; status: string } {
-  const status = runGit(["status", "--porcelain=v1", "--untracked-files=all", "--", ".seeds/knowledge.jsonl"], true).stdout;
-  return { dirty: status.length > 0, status };
-}
-
-function knowledgeMergeUnionConfigured(): boolean {
-  const path = join(optionsGlobal.repo, ".seeds", ".gitattributes");
-  if (!existsSync(path)) return false;
-  return readFileSync(path, "utf8").split(/\r?\n/).some((line) => /^\s*knowledge\.jsonl\s+.*\bmerge=union\b/.test(line));
-}
-
-function parseKnowledgeCaptureState(text: string): string | null {
-  const match = text.match(/\bcapture_state\b\s*[:=]\s*`?([a-z_]+)/i);
-  return match?.[1] ?? null;
-}
-
-function parseAcceptedIds(text: string): string[] {
-  const ids = new Set<string>();
-  for (const line of text.split(/\r?\n/)) {
-    if (!/\baccepted(?:_|\s+)ids?\b/i.test(line)) continue;
-    for (const match of line.matchAll(/\bex-[a-f0-9]{6}\b/g)) ids.add(match[0]);
-  }
-  return [...ids].sort();
-}
-
-function stripJsonComments(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split(/\r?\n/)
-    .map((line) => line.replace(/(^|[^:])\/\/.*$/g, "$1"))
-    .join("\n");
-}
-
-function asKnowledgeCandidate(value: unknown): { type: string; content: string } | null {
-  if (!isObject(value)) return null;
-  const type = stringField(value.type);
-  const content = stringField(value.content);
-  if (type && content && KNOWLEDGE_RECORD_TYPES.has(type) && !("evidence" in value)) return { type, content };
-  return null;
-}
-
-function addDirectKnowledgeCandidate(value: unknown, out: Array<{ type: string; content: string }>): void {
-  if (Array.isArray(value)) {
-    for (const item of value) addDirectKnowledgeCandidate(item, out);
-    return;
-  }
-  const candidate = asKnowledgeCandidate(value);
-  if (candidate) out.push(candidate);
-}
-
-function addAcceptedRecords(value: unknown, out: Array<{ type: string; content: string }>): void {
-  if (!isObject(value)) return;
-  if (Array.isArray(value.accepted_records)) {
-    for (const item of value.accepted_records) addDirectKnowledgeCandidate(item, out);
-  }
-}
-
-function extractStructuredKnowledgeCandidates(text: string): Array<{ type: string; content: string }> {
-  const candidates: Array<{ type: string; content: string }> = [];
-  const parseAcceptedRecordsKey = (raw: string) => {
-    try {
-      addAcceptedRecords(JSON.parse(stripJsonComments(raw)) as unknown, candidates);
-    } catch {
-      // Ignore non-JSON prose. The loop must not infer records from text.
-    }
-  };
-  for (const match of text.matchAll(/```(?:json|jsonc)?\s*\n([\s\S]*?)```/gi)) parseAcceptedRecordsKey(match[1] ?? "");
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim().replace(/^[-*]\s+/, "");
-    if (trimmed.startsWith("{")) parseAcceptedRecordsKey(trimmed);
-  }
-  for (const section of acceptedRecordsSections(text)) {
-    const parseDirect = (raw: string) => {
-      try {
-        const parsed = JSON.parse(stripJsonComments(raw)) as unknown;
-        if (Array.isArray(parsed)) addDirectKnowledgeCandidate(parsed, candidates);
-        else {
-          addDirectKnowledgeCandidate(parsed, candidates);
-          addAcceptedRecords(parsed, candidates);
-        }
-      } catch {
-        // Ignore non-JSON prose. Only explicit JSON records are accepted.
-      }
-    };
-    for (const match of section.matchAll(/```(?:json|jsonc)?\s*\n([\s\S]*?)```/gi)) parseDirect(match[1] ?? "");
-    for (const line of section.split(/\r?\n/)) {
-      const trimmed = line.trim().replace(/^[-*]\s+/, "");
-      if (trimmed.startsWith("{") || trimmed.startsWith("[")) parseDirect(trimmed);
-    }
-  }
-  const seen = new Set<string>();
-  return candidates.filter((candidate) => {
-    const key = `${candidate.type}\0${candidate.content}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function acceptedRecordsSections(text: string): string[] {
-  const sections: string[] = [];
-  const lines = text.split(/\r?\n/);
-  let active: string[] | null = null;
-  const flush = () => {
-    if (active) sections.push(active.join("\n"));
-    active = null;
-  };
-  for (const line of lines) {
-    const label = markdownSectionLabel(line);
-    if (label) {
-      if (/^accepted records$/i.test(label)) {
-        flush();
-        active = [];
-        continue;
-      }
-      if (active) {
-        flush();
-        continue;
-      }
-    }
-    if (active) active.push(line);
-  }
-  flush();
-  return sections;
-}
-
-function markdownSectionLabel(line: string): string | null {
-  const trimmed = line.trim();
-  const heading = trimmed.match(/^#{1,6}\s+(.+?)\s*#*$/);
-  const raw = heading?.[1] ?? trimmed.match(/^([A-Za-z][A-Za-z0-9 _-]{1,80}):?\s*$/)?.[1];
-  return raw ? raw.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ") : null;
-}
-
-function baseKnowledgeCaptureCheck(seed: string, mode: Options["knowledgeCapture"]): JsonObject {
-  const auditPath = knowledgeCapturePath(seed);
-  const auditPresent = existsSync(auditPath);
-  const auditText = auditPresent ? readFileSync(auditPath, "utf8") : "";
-  const storePath = knowledgeStorePath();
-  const store = knowledgeStoreLineCount(storePath);
-  const gitState = knowledgeStoreGitState();
-  const auditValidation = validateKnowledgeCaptureText(auditText, auditPresent);
-  const captureState = auditValidation.captureState;
-  const candidates = auditValidation.structuredCandidates;
-  const acceptedIds = auditValidation.acceptedIds;
-  const captureOk = auditValidation.ok && captureState !== "store_missing";
-  return {
-    contract: "knowledge_capture_check.v1",
-    ok: captureOk,
-    mode,
-    seed,
-    state: auditValidation.state,
-    inputs: {
-      audit_path: `tmp/dispatch-work/${seed}/knowledge-capture.md`,
-      audit_present: auditPresent,
-      store_path: ".seeds/knowledge.jsonl",
-      store_present: existsSync(storePath),
-      approved_store_script: KNOWLEDGE_STORE_SCRIPT,
-      approved_store_present: existsSync(KNOWLEDGE_STORE_SCRIPT),
-    },
-    audit: {
-      capture_state: captureState,
-      valid: auditValidation.ok,
-      errors: auditValidation.errors,
-      marker_count: auditValidation.audit.markerCount,
-      store_count: auditValidation.audit.storeCount ?? null,
-      merge_union: auditValidation.audit.mergeUnion ?? null,
-      artifacts_reviewed: auditValidation.audit.artifactsReviewed ?? null,
-      candidate_count: auditValidation.audit.candidateCount ?? null,
-      rejected_count: auditValidation.audit.rejectedCount ?? null,
-      rationale_present: auditValidation.audit.rationalePresent,
-      accepted_ids: acceptedIds,
-      structured_candidates_count: candidates.length,
-      structured_candidates: candidates,
-    },
-    store: {
-      valid: store.valid,
-      count: store.count,
-      ...(store.error ? { error: store.error } : {}),
-      dirty: gitState.dirty,
-      status_porcelain: gitState.status,
-      merge_union: knowledgeMergeUnionConfigured(),
-    },
-  };
-}
-
-function recordKnowledgeCandidates(check: JsonObject): JsonObject {
-  const audit = isObject(check.audit) ? check.audit : {};
-  const candidates = Array.isArray(audit.structured_candidates)
-    ? audit.structured_candidates.filter(isObject).flatMap((item) => {
-        const type = stringField(item.type);
-        const content = stringField(item.content);
-        return type && content && KNOWLEDGE_RECORD_TYPES.has(type) ? [{ type, content }] : [];
-      })
-    : [];
-  if (check.state === "audit_missing" || check.state === "audit_invalid") return check;
-  if (check.state !== "recorded") return check;
-  if (!existsSync(KNOWLEDGE_STORE_SCRIPT) || !existsSync(join(optionsGlobal.repo, ".seeds"))) {
-    return { ...check, ok: false, state: "store_missing" };
-  }
-  if (candidates.length === 0) return check;
-
-  const before = knowledgeStoreLineCount(knowledgeStorePath()).count;
-  const outputs: JsonObject[] = [];
-  for (const candidate of candidates) {
-    const proc = spawnSync(process.execPath, [KNOWLEDGE_STORE_SCRIPT, "record", ".seeds/knowledge.jsonl", "--stdin"], {
-      cwd: optionsGlobal.repo,
-      input: JSON.stringify(candidate),
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
-    let parsed: unknown = null;
-    try {
-      parsed = proc.stdout.trim() ? JSON.parse(proc.stdout.trim()) as unknown : null;
-    } catch {
-      parsed = null;
-    }
-    outputs.push({
-      status: proc.status ?? 1,
-      ok: isObject(parsed) ? parsed.ok === true : false,
-      stdout: isObject(parsed) ? parsed : null,
-      stderr: proc.stderr.trim(),
-    });
-  }
-  const failed = outputs.filter((output) => output.ok !== true);
-  const after = knowledgeStoreLineCount(knowledgeStorePath()).count;
-  return {
-    ...baseKnowledgeCaptureCheck(String(check.seed), "record"),
-    ok: failed.length === 0,
-    state: failed.length === 0 ? "recorded" : "record_failed",
-    record: {
-      candidates: candidates.length,
-      store_count_before: before,
-      store_count_after: after,
-      command_outputs: outputs,
-    },
-  };
-}
-
-function runKnowledgeCaptureStep(seedstackDir: string, iteration: number, seed: string): void {
-  const mode = optionsGlobal.knowledgeCapture;
-  if (mode === "off") {
-    emit(seedstackDir, "knowledge_capture", { seed, mode, ok: true, state: "off" });
-    return;
-  }
-  let check = baseKnowledgeCaptureCheck(seed, mode);
-  if (mode === "record") check = recordKnowledgeCandidates(check);
-  const path = writeLoopJson(seedstackDir, iteration, `knowledge-capture-${seed}`, check);
-  emit(seedstackDir, "knowledge_capture", {
-    seed,
-    mode,
-    ok: ok(check),
-    state: stringField(check.state) ?? null,
-    path,
-  });
-  if (knowledgeCaptureBlocksRequired(check)) {
-    stop(seedstackDir, iteration, "blocked", "knowledge_capture_required_failed", {
-      seed,
-      knowledge_capture: path,
-      state: stringField(check.state) ?? null,
-    });
-  }
-}
-
-function runRequiredKnowledgeCaptureAudit(seedstackDir: string, iteration: number, seed: string): void {
-  if (!optionsGlobal.knowledgeRequired) return;
-  const check = baseKnowledgeCaptureCheck(seed, "audit");
-  const path = writeLoopJson(seedstackDir, iteration, `knowledge-capture-required-${seed}`, check);
-  emit(seedstackDir, "knowledge_capture_required", {
-    seed,
-    ok: ok(check),
-    state: stringField(check.state) ?? null,
-    path,
-  });
-  if (knowledgeCaptureBlocksRequired(check)) {
-    stop(seedstackDir, iteration, "blocked", "knowledge_capture_required_failed", {
-      seed,
-      knowledge_capture: path,
-      state: stringField(check.state) ?? null,
-    });
-  }
-}
-
-function knowledgeCaptureBlocksRequired(check: JsonObject): boolean {
-  return !ok(check) && optionsGlobal.knowledgeRequired;
-}
-
-function markdownCell(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
-}
-
-type PerSeedCommitMetadata = {
-  commit: string;
-  worktreeRoot: string | null;
-  branch: string | null;
-  headBefore: string;
-  headAfter: string;
-  gitCommonDir: string | null;
-  changedPathAllowlist: string[];
-};
-
 function ledgerHeaderColumns(): string[] {
   return [
     "timestamp",
@@ -1771,7 +770,19 @@ function hasCloseCurrentProposal(proposals: JsonObject[], seed: string): boolean
 function scanProvesSeedClosed(scan: JsonObject, seed: string): boolean {
   const issue = scanIssueById(scan, seed);
   if (issue) return stringField(issue.status) === "closed";
-  return stringArray(scan.closed_adopted).includes(seed) || stringArray(isObject(scan.ids) ? scan.ids.adopted_closed_ids : undefined).includes(seed);
+  if (stringArray(scan.closed_adopted).includes(seed)) return true;
+  if (stringArray(isObject(scan.ids) ? scan.ids.adopted_closed_ids : undefined).includes(seed)) return true;
+
+  // Some seed CLI versions omit closed issues from list/ready/blocked output.
+  // In that shape, an adopted seed absent from every nonterminal scan bucket is
+  // the only observable closed state.
+  const adopted = stringArray(isObject(scan.adopted) ? scan.adopted.adopted_seed_ids : undefined);
+  if (!adopted.includes(seed)) return false;
+  const open = stringArray(scan.open_adopted);
+  const ready = stringArray(isObject(scan.ids) ? scan.ids.adopted_ready_ids : undefined);
+  const blocked = stringArray(isObject(scan.ids) ? scan.ids.adopted_blocked_ids : undefined);
+  const listed = stringArray(isObject(scan.ids) ? scan.ids.list_ids : undefined);
+  return !open.includes(seed) && !ready.includes(seed) && !blocked.includes(seed) && !listed.includes(seed);
 }
 
 function writeCloseCurrentInvariantArtifact(
@@ -1858,7 +869,7 @@ function createPerSeedCommit(seedstackDir: string, iteration: number, seed: stri
   }
   let metadata: PerSeedCommitMetadata | null = null;
   try {
-    runGit(["add", "-A", "--", ...paths]);
+    runGit(["add", "-A", "-f", "--", ...paths]);
     const diff = runGit(["diff", "--cached", "--quiet"], true);
     if (diff.status === 0) {
       stop(seedstackDir, iteration, "blocked", "no_staged_seed_changes_to_commit", { seed, paths });
@@ -2115,9 +1126,9 @@ function recoverMissingDispatchChildResult(
 ): { path: string; result: ChildResult } | null {
   const attempt = discoverLatestChildAttempt(seedstackDir, "dispatch", seed);
   if (!attempt) return null;
-  const resultPath = attempt.record.result_path;
+  const resultPathValue = attempt.record.result_path;
   try {
-    return { path: resultPath, result: readChildResult(resultPath, "dispatch", seed) };
+    return { path: resultPathValue, result: readChildResult(resultPathValue, "dispatch", seed) };
   } catch {
     // Missing or invalid result; reconcile via strict artifacts only when clean.
   }
@@ -2128,22 +1139,22 @@ function recoverMissingDispatchChildResult(
   emit(seedstackDir, "dispatch_missing_result_validation", { seed, ok: ok(validation), path: latestArtifactPath(validation), attempt_path: attempt.path });
   const implPaths = dirtySnapshotImplPaths(dirtySnapshot);
   if (validationHasCloseGate(validation) && implPaths.length === 0) {
-    const recovered = writeRecoveredChildResult(resultPath, seed, roundPath, {
+    const recovered = writeRecoveredChildResult(resultPathValue, seed, roundPath, {
       attempt_path: attempt.path,
       validation_path: latestArtifactPath(validation),
       dirty_snapshot_path: latestArtifactPath(dirtySnapshot),
     });
-    emit(seedstackDir, "dispatch_missing_result_recovered", { seed, result_path: resultPath, attempt_path: attempt.path });
-    return { path: resultPath, result: recovered };
+    emit(seedstackDir, "dispatch_missing_result_recovered", { seed, result_path: resultPathValue, attempt_path: attempt.path });
+    return { path: resultPathValue, result: recovered };
   }
   const capsule = writeFailureCapsule(seedstackDir, iteration, "dispatch", seed, "dispatch_child_missing_result", {
     attempt_path: attempt.path,
-    result_path: resultPath,
+    result_path: resultPathValue,
     validation: latestArtifactPath(validation),
     dirty_snapshot: latestArtifactPath(dirtySnapshot),
     dirty_impl_paths: implPaths,
   });
-  writeJson(resultPath, {
+  writeJson(resultPathValue, {
     contract: "seedstack_child_result.v1",
     ok: true,
     role: "dispatch",
@@ -2163,7 +1174,7 @@ function recoverMissingDispatchChildResult(
   stop(seedstackDir, iteration, "blocked", implPaths.length > 0 ? "dispatch_missing_result_dirty_repo" : "dispatch_missing_result_incomplete_artifacts", {
     seed,
     attempt: attempt.path,
-    result_path: resultPath,
+    result_path: resultPathValue,
     validation: latestArtifactPath(validation),
     dirty_snapshot: latestArtifactPath(dirtySnapshot),
     failure_capsule: capsule,
@@ -2454,6 +1465,54 @@ function verifyExistingExhausted(seedstackDir: string, iteration: number, loopSt
   }
   finalEvent(seedstackDir, true, "exhausted", { reason: "existing_exhausted_revalidated", scan: latestArtifactPath(scan) });
 }
+
+// ── Knowledge capture orchestration (wrappers) ──────────────────────────────
+
+function runKnowledgeCaptureStep(seedstackDir: string, iteration: number, seed: string): void {
+  const mode = optionsGlobal.knowledgeCapture;
+  if (mode === "off") {
+    emit(seedstackDir, "knowledge_capture", { seed, mode, ok: true, state: "off" });
+    return;
+  }
+  let check = baseKnowledgeCaptureCheck(optionsGlobal.repo, seed, mode, runGit);
+  if (mode === "record") check = recordKnowledgeCandidates(optionsGlobal.repo, check);
+  const path = writeLoopJson(seedstackDir, iteration, `knowledge-capture-${seed}`, check);
+  emit(seedstackDir, "knowledge_capture", {
+    seed,
+    mode,
+    ok: ok(check),
+    state: stringField(check.state) ?? null,
+    path,
+  });
+  if (knowledgeCaptureBlocksRequired(check, optionsGlobal.knowledgeRequired)) {
+    stop(seedstackDir, iteration, "blocked", "knowledge_capture_required_failed", {
+      seed,
+      knowledge_capture: path,
+      state: stringField(check.state) ?? null,
+    });
+  }
+}
+
+function runRequiredKnowledgeCaptureAudit(seedstackDir: string, iteration: number, seed: string): void {
+  if (!optionsGlobal.knowledgeRequired) return;
+  const check = baseKnowledgeCaptureCheck(optionsGlobal.repo, seed, "audit", runGit);
+  const path = writeLoopJson(seedstackDir, iteration, `knowledge-capture-required-${seed}`, check);
+  emit(seedstackDir, "knowledge_capture_required", {
+    seed,
+    ok: ok(check),
+    state: stringField(check.state) ?? null,
+    path,
+  });
+  if (knowledgeCaptureBlocksRequired(check, optionsGlobal.knowledgeRequired)) {
+    stop(seedstackDir, iteration, "blocked", "knowledge_capture_required_failed", {
+      seed,
+      knowledge_capture: path,
+      state: stringField(check.state) ?? null,
+    });
+  }
+}
+
+// ── Main loop ────────────────────────────────────────────────────────────────
 
 async function runLoop(): Promise<never> {
   const { seedstackDir, adoptionSelection } = optionsGlobal;
@@ -3167,1141 +2226,44 @@ async function runLoop(): Promise<never> {
   stop(optionsGlobal.seedstackDir, iteration, "loop_cap", "max_supervisor_iterations");
 }
 
-function assertSelfTest(condition: unknown, message: string): void {
-  if (!condition) throw new Error(`self-test failed: ${message}`);
+// ── Self-test adapter: export orchestrator functions for self-tests ──────────
+
+export function getOptionsGlobal(): Options & { seedstackDir: string; adoptionSelection: string } {
+  return optionsGlobal;
 }
 
-function runGitSelfTest(cwd: string, args: string[]): void {
-  const result = spawnSync("git", args, { cwd, encoding: "utf8", maxBuffer: 5 * 1024 * 1024 });
-  assertSelfTest((result.status ?? 1) === 0, `git ${args.join(" ")}: ${result.stderr || result.stdout}`);
+export function setOptionsForTest(opts: Options & { seedstackDir: string; adoptionSelection: string }): void {
+  optionsGlobal = opts;
 }
 
-function runWorktreePreflightSelfTest(): void {
-  const root = mkdtempSync(join(tmpdir(), "seedstack-worktree-preflight-"));
-  try {
-    const repo = join(root, "repo");
-    mkdirSync(repo, { recursive: true });
-    runGitSelfTest(repo, ["init", "-b", "main"]);
-    runGitSelfTest(repo, ["config", "user.email", "seedstack@example.test"]);
-    runGitSelfTest(repo, ["config", "user.name", "Seedstack Test"]);
-    writeFileSync(join(repo, "README.md"), "seedstack\n");
-    runGitSelfTest(repo, ["add", "README.md"]);
-    runGitSelfTest(repo, ["commit", "-m", "init"]);
-
-    const subdir = join(repo, "nested", "dir");
-    mkdirSync(subdir, { recursive: true });
-    const main = preflightRepo({ repoInput: repo, cwd: root, policy: "linked-ok", requireWorktree: false });
-    const fromSubdir = preflightRepo({ repoInput: subdir, cwd: root, policy: "linked-ok", requireWorktree: false });
-    assertSelfTest(main.repo === repo, "main worktree normalizes to git top-level");
-    assertSelfTest(fromSubdir.repo === repo, "subdir input normalizes to git top-level");
-    assertSelfTest(main.metadata.git_common_dir !== null, "git common dir recorded");
-    assertSelfTest(main.metadata.git_dir !== null, "git dir recorded");
-    assertSelfTest(main.metadata.worktree_root === repo, "worktree root recorded");
-    assertSelfTest(main.metadata.branch === "main", "branch recorded");
-    assertSelfTest(typeof main.metadata.head === "string" && main.metadata.head.length > 0, "head recorded");
-    assertSelfTest(!main.metadata.linked, "main worktree is not linked");
-
-    const linked = join(root, "linked");
-    runGitSelfTest(repo, ["worktree", "add", "-b", "wt-ok", linked]);
-    const linkedPreflight = preflightRepo({ repoInput: linked, cwd: root, policy: "linked-ok", requireWorktree: false });
-    assertSelfTest(linkedPreflight.repo === linked, "linked worktree normalizes to linked root");
-    assertSelfTest(linkedPreflight.metadata.linked, "linked worktree accepted by linked-ok");
-    const requireLinked = preflightRepo({ repoInput: linked, cwd: root, policy: "linked-ok", requireWorktree: true });
-    assertSelfTest(requireLinked.metadata.require_worktree, "require-worktree accepted linked worktree");
-
-    const persistedSeedstackDir = join(root, "persisted-stack");
-    const adoptionSelection = join(root, "adoption-selection.json");
-    mkdirSync(persistedSeedstackDir, { recursive: true });
-    writeJson(statePath(persistedSeedstackDir), {
-      state: "dispatching",
-      repo: linked,
-      worktree: linkedPreflight.metadata,
-    });
-    writeJson(adoptionSelection, { adopted_seed_ids: ["seed-test"] });
-    const fromPersisted = parseArgs([
-      "--repo",
-      "relative-that-would-be-wrong-from-cwd",
-      "--seedstack-dir",
-      persistedSeedstackDir,
-      "--adoption-selection",
-      adoptionSelection,
-    ]);
-    assertSelfTest(fromPersisted.repo === linked, "run-state repo wins over cwd-relative repo during resume");
-    assertSelfTest(
-      fromPersisted.originalRepo === "relative-that-would-be-wrong-from-cwd",
-      "original repo argument preserved while using persisted repo",
-    );
-
-    try {
-      preflightRepo({ repoInput: repo, cwd: root, policy: "linked-ok", requireWorktree: true });
-      assertSelfTest(false, "require-worktree fails main worktree");
-    } catch (error) {
-      assertSelfTest(String((error as Error).message).includes("require-worktree"), "require-worktree failure mentions flag");
-    }
-
-    const duplicate = join(root, "linked-duplicate");
-    runGitSelfTest(repo, ["worktree", "add", "--force", duplicate, "wt-ok"]);
-    try {
-      preflightRepo({ repoInput: linked, cwd: root, policy: "linked-ok", requireWorktree: false });
-      assertSelfTest(false, "linked-ok blocks same-branch duplicate linked worktrees");
-    } catch (error) {
-      assertSelfTest(String((error as Error).message).includes("same-branch"), "same-branch duplicate error mentions policy");
-    }
-    const override = preflightRepo({ repoInput: linked, cwd: root, policy: "allow-same-branch", requireWorktree: false });
-    assertSelfTest(override.metadata.policy === "allow-same-branch", "explicit override accepts same-branch duplicate");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-function runLoopIterationAllocationSelfTest(): void {
-  const root = mkdtempSync(join(tmpdir(), "seedstack-loop-iteration-"));
-  const adoptionSelection = join(root, "adoption-selection.json");
-  const previousOptions = optionsGlobal;
-  writeFileSync(adoptionSelection, JSON.stringify({ adopted_seed_ids: ["seed-test"] }));
-  optionsGlobal = {
-    ...parseArgs(["--repo", root, "--seedstack-dir", root, "--adoption-selection", adoptionSelection]),
-    seedstackDir: root,
-    adoptionSelection,
-  };
-
-  try {
-    const noState = join(root, "no-state");
-    mkdirSync(noState, { recursive: true });
-    assertSelfTest(loadLoopState(noState).loop_iteration === 0, "loop iteration defaults to zero without state or files");
-    assertSelfTest(allocateSupervisorIteration(noState).iteration === 1, "first allocation starts at one");
-
-    const persisted = join(root, "persisted");
-    mkdirSync(persisted, { recursive: true });
-    writeJson(loopStatePath(persisted), {
-      contract: "seedstack_loop_state.v1",
-      loop_iteration: 7,
-      scan_epoch: 0,
-      manage_epoch: 0,
-      total_followups: 0,
-      baseline_seed_count: 1,
-      skipped_seeds: [],
-    });
-    assertSelfTest(loadLoopState(persisted).loop_iteration === 7, "loop iteration loads persisted state");
-    assertSelfTest(allocateSupervisorIteration(persisted).iteration === 8, "allocation follows persisted state");
-
-    const filesOnly = join(root, "files-only");
-    mkdirSync(loopDir(filesOnly), { recursive: true });
-    writeFileSync(iterationArtifactPath(filesOnly, 12, "scan"), "{}\n");
-    assertSelfTest(loadLoopState(filesOnly).loop_iteration === 12, "loop iteration scans existing artifact files");
-    assertSelfTest(allocateSupervisorIteration(filesOnly).iteration === 13, "allocation follows existing artifact files");
-
-    const merged = join(root, "merged");
-    mkdirSync(loopDir(merged), { recursive: true });
-    writeJson(loopStatePath(merged), {
-      contract: "seedstack_loop_state.v1",
-      loop_iteration: 7,
-      scan_epoch: 0,
-      manage_epoch: 0,
-      total_followups: 0,
-      baseline_seed_count: 1,
-      skipped_seeds: [],
-    });
-    writeFileSync(iterationArtifactPath(merged, 12, "scan"), "{}\n");
-    assertSelfTest(loadLoopState(merged).loop_iteration === 12, "loop iteration merges persisted state and file max");
-
-    const large = join(root, "large");
-    mkdirSync(loopDir(large), { recursive: true });
-    writeFileSync(join(loopDir(large), "12345-scan.json"), "{}\n");
-    assertSelfTest(loadLoopState(large).loop_iteration === 12345, "loop iteration scans large names");
-    assertSelfTest(allocateSupervisorIteration(large).iteration === 12346, "allocation follows large existing names");
-
-    const retry = join(root, "retry");
-    mkdirSync(loopDir(retry), { recursive: true });
-    const first = allocateSupervisorIteration(retry).iteration;
-    const firstResult = resultPath(retry, "dispatch", "seed-test", first);
-    writeFileSync(firstResult, "{}\n");
-    const second = allocateSupervisorIteration(retry).iteration;
-    const secondResult = resultPath(retry, "dispatch", "seed-test", second);
-    assertSelfTest(second === first + 1, "retry same seed allocates fresh supervisor iteration");
-    assertSelfTest(secondResult !== firstResult && existsSync(firstResult), "retry same seed does not clobber first dispatch result");
-  } finally {
-    optionsGlobal = previousOptions;
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-function runArtifactRecoveryFixtureSelfTest(): void {
-  const root = mkdtempSync(join(tmpdir(), "seedstack-artifact-recovery-"));
-  const adoptionSelection = join(root, "adoption-selection.json");
-  const previousOptions = optionsGlobal;
-  writeFileSync(adoptionSelection, JSON.stringify({ adopted_seed_ids: ["seed-test"] }));
-  optionsGlobal = {
-    ...parseArgs(["--repo", root, "--seedstack-dir", root, "--adoption-selection", adoptionSelection]),
-    seedstackDir: root,
-    adoptionSelection,
-  };
-
-  try {
-    mkdirSync(loopDir(root), { recursive: true });
-    const firstScan = iterationArtifactPath(root, 1, "scan");
-    writeFileSync(firstScan, "{\"ok\":true}\n");
-
-    const resumed = allocateSupervisorIteration(root).iteration;
-    const resumedScan = artifact(root, "scan", resumed);
-    writeFileSync(resumedScan, "{\"ok\":true}\n");
-    assertSelfTest(resumed === 2, "resumed supervisor run allocates loop/0002 after loop/0001");
-    assertSelfTest(firstScan.endsWith("loop/0001-scan.json"), "first scan fixture uses loop/0001");
-    assertSelfTest(resumedScan.endsWith("loop/0002-scan.json"), "resumed scan fixture uses loop/0002");
-    assertSelfTest(existsSync(firstScan), "resumed supervisor run does not clobber loop/0001");
-
-    const firstDispatch = resultPath(root, "dispatch", "seed-test", resumed);
-    writeFileSync(firstDispatch, "{\"decision\":\"blocked\"}\n");
-    const retryIteration = allocateSupervisorIteration(root).iteration;
-    const retryDirty = artifact(root, "retry-dirty-seed-test", retryIteration);
-    const retryDispatch = resultPath(root, "dispatch", "seed-test", retryIteration);
-    writeFileSync(retryDirty, "{\"ok\":true}\n");
-    writeFileSync(retryDispatch, "{\"decision\":\"closed\"}\n");
-    assertSelfTest(retryIteration === 3, "retry same seed allocates separate loop iteration");
-    assertSelfTest(firstDispatch.endsWith("loop/0002-dispatch-seed-test.result.json"), "first dispatch result keeps resumed iteration");
-    assertSelfTest(retryDirty.endsWith("loop/0003-retry-dirty-seed-test.json"), "retry dirty artifact uses fresh iteration");
-    assertSelfTest(retryDispatch.endsWith("loop/0003-dispatch-seed-test.result.json"), "retry dispatch result uses fresh iteration");
-    assertSelfTest(existsSync(firstDispatch), "retry same seed does not clobber previous dispatch result");
-
-    mkdirSync(recoveryAttemptDir(root, 1), { recursive: true });
-    writeFileSync(recoveryScanPath(root, 1), "{\"ok\":true}\n");
-    writeFileSync(recoveryValidationPath(root, 1), "{\"ok\":true}\n");
-    const rootRecoveryFiles = readdirSync(root).filter((entry) => /^recovery-.*\.(?:json|md)$/.test(entry));
-    assertSelfTest(rootRecoveryFiles.length === 0, "recovery artifacts stay under recovery/rec-####");
-  } finally {
-    optionsGlobal = previousOptions;
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-function runLoopDirtyGuardPolicyFixtureSelfTest(): void {
-  const root = mkdtempSync(join(tmpdir(), "seedstack-loop-dirty-guard-"));
-  try {
-    const repo = join(root, "repo");
-    const seed = "seed-test";
-    const round = join(repo, "tmp", "dispatch-work", seed, "round-1");
-    mkdirSync(round, { recursive: true });
-
-    const result = spawnSync(process.execPath, [dispatchValidatorPath(), "--self-test"], {
-      cwd: repo,
-      encoding: "utf8",
-      maxBuffer: 20 * 1024 * 1024,
-    });
-    assertSelfTest((result.status ?? 1) === 0, "dispatch validator self-test covers loop dirty guard policy");
-    const parsed = JSON.parse(result.stdout) as JsonObject;
-    const tests = Array.isArray(parsed.tests) ? parsed.tests.filter((item): item is JsonObject => typeof item === "object" && item !== null) : [];
-    assertSelfTest(
-      tests.some((test) => test.name === "loop dirty guard snapshot mismatch softens" && test.pass === true),
-      "loop dirty guard policy softens equivalent supervisor snapshot mismatches",
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-function runMissingResultRecoverySelfTest(): void {
-  const root = mkdtempSync(join(tmpdir(), "seedstack-missing-result-recovery-"));
-  const previousOptions = optionsGlobal;
-  try {
-    const repo = join(root, "repo");
-    const seedstackDir = join(root, "stack");
-    const adoptionSelection = join(root, "adoption-selection.json");
-    const seed = "seed-recovery";
-    mkdirSync(repo, { recursive: true });
-    mkdirSync(seedstackDir, { recursive: true });
-    runGitSelfTest(repo, ["init", "-b", "main"]);
-    runGitSelfTest(repo, ["config", "user.email", "seedstack@example.test"]);
-    runGitSelfTest(repo, ["config", "user.name", "Seedstack Test"]);
-    writeFileSync(join(repo, "README.md"), "fixture\n");
-    runGitSelfTest(repo, ["add", "README.md"]);
-    runGitSelfTest(repo, ["commit", "-m", "fixture baseline"]);
-    writeJson(adoptionSelection, { adopted_seed_ids: [seed] });
-    optionsGlobal = {
-      ...parseArgs(["--repo", repo, "--seedstack-dir", seedstackDir, "--adoption-selection", adoptionSelection]),
-      seedstackDir,
-      adoptionSelection,
-    };
-    writeDispatchRound({ repo, seed });
-    mkdirSync(loopDir(seedstackDir), { recursive: true });
-    const result = join(seedstackDir, "loop", "0001-dispatch-seed-recovery.result.json");
-    mkdirSync(childAttemptsDir(seedstackDir), { recursive: true });
-    writeJson(childAttemptPath(seedstackDir, 1, "dispatch", seed), {
-      contract: "seedstack_child_attempt.v1",
-      attempt_id: "0001-dispatch-seed-recovery",
-      role: "dispatch",
-      seed,
-      iteration: 1,
-      result_path: result,
-      prompt_path: join(seedstackDir, "loop", "0001-dispatch-seed-recovery.prompt.md"),
-      log_path: join(seedstackDir, "loop", "0001-dispatch-seed-recovery.log"),
-      pid: 12345,
-      pgid: 12345,
-      liveness_handle: "pgid:12345",
-      process_identity: { pid: 12345, starttime: "1", cwd: repo },
-      baseline_dirty_snapshot: { paths: [] },
-      heartbeat: { at: "2026-01-01T00:00:00Z", stale_after_ms: 1000 },
-      state: "failed",
-      fencing_token: "fixture",
-      started_at: "2026-01-01T00:00:00Z",
-      updated_at: "2026-01-01T00:00:01Z",
-      ended_at: "2026-01-01T00:00:01Z",
-      exit_code: 0,
-      signal: null,
-      timeout: null,
-    });
-    const recovered = recoverMissingDispatchChildResult(seedstackDir, 2, seed);
-    assertSelfTest(recovered?.result.decision === "closed", "missing result with clean strict artifacts recovers closed child result");
-    assertSelfTest(existsSync(result), "recovered child result written");
-    const parsed = readChildResult(result, "dispatch", seed);
-    assertSelfTest(parsed.summary && (parsed.summary as JsonObject).recovered_missing_result === true, "recovered result records recovery summary");
-  } finally {
-    optionsGlobal = previousOptions;
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-function runManageQueueOpsSelfTest(): void {
-  const root = mkdtempSync(join(tmpdir(), "seedstack-queue-ops-"));
-  const previousOptions = optionsGlobal;
-  try {
-    const repo = join(root, "repo");
-    const seedstackDir = join(root, "stack");
-    const adoptionSelection = join(root, "adoption-selection.json");
-    const stateFile = join(root, "queue-state.json");
-    const cliLog = join(root, "seed-cli-log.jsonl");
-    const fakeCli = join(root, "fake-seed-cli");
-    mkdirSync(join(repo, ".seeds"), { recursive: true });
-    mkdirSync(seedstackDir, { recursive: true });
-    runGitSelfTest(repo, ["init", "-b", "main"]);
-    runGitSelfTest(repo, ["config", "user.email", "seedstack@example.test"]);
-    runGitSelfTest(repo, ["config", "user.name", "Seedstack Test"]);
-    writeJson(join(repo, ".seeds", "issues.jsonl"), { seed: "seed-test", status: "open" });
-    runGitSelfTest(repo, ["add", ".seeds/issues.jsonl"]);
-    runGitSelfTest(repo, ["commit", "-m", "seed init"]);
-    writeJson(adoptionSelection, { adopted_seed_ids: ["seed-test"], excluded_open_seed_ids: [] });
-    writeJson(stateFile, {
-      issues: [{ id: "seed-test", status: "open", labels: ["impl"], priority: 1, createdAt: "2026-01-01T00:00:00Z" }],
-      next: 1,
-    });
-    writeFileSync(
-      fakeCli,
-      `#!/usr/bin/env bun
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-const stateFile = ${JSON.stringify(stateFile)};
-const logFile = ${JSON.stringify(cliLog)};
-const repo = ${JSON.stringify(repo)};
-const args = process.argv.slice(2);
-appendFileSync(logFile, JSON.stringify({ cwd: process.cwd(), argv: args }) + "\\n");
-const state = JSON.parse(readFileSync(stateFile, "utf8"));
-const command = args[0];
-const issueFor = (id) => state.issues.find((issue) => issue.id === id);
-const writeState = () => {
-  writeFileSync(stateFile, JSON.stringify(state, null, 2) + "\\n");
-  writeFileSync(repo + "/.seeds/issues.jsonl", state.issues.map((issue) => JSON.stringify(issue)).join("\\n") + "\\n");
-};
-const envelope = (data) => JSON.stringify({ ok: true, command, data }) + "\\n";
-if (command === "health") process.stdout.write(envelope({ summary: { pass: 1, warning: 0, error: 0 }, checks: [] }));
-else if (command === "list") process.stdout.write(envelope({ count: state.issues.length, issues: state.issues }));
-else if (command === "ready") process.stdout.write(envelope({ count: state.issues.filter((issue) => issue.status !== "closed").length, issues: state.issues.filter((issue) => issue.status !== "closed") }));
-else if (command === "blocked") process.stdout.write(envelope({ count: 0, issues: [] }));
-else if (command === "close") {
-  const issue = issueFor(args[1]);
-  if (!issue) process.exit(3);
-  issue.status = "closed";
-  writeState();
-  process.stdout.write(JSON.stringify({ ok: true, command, id: args[1] }) + "\\n");
-} else if (command === "create") {
-  const title = args[args.indexOf("--title") + 1];
-  const id = "follow-" + state.next++;
-  state.issues.push({ id, title, status: "open", labels: [], priority: 2, createdAt: "2026-01-01T00:00:00Z" });
-  writeState();
-  process.stdout.write(JSON.stringify({ ok: true, command, issue: { id } }) + "\\n");
-} else {
-  process.stderr.write("unsupported " + command + "\\n");
-  process.exit(2);
-}
-`,
-    );
-    chmodSync(fakeCli, 0o755);
-    optionsGlobal = {
-      ...parseArgs([
-        "--repo",
-        repo,
-        "--seedstack-dir",
-        seedstackDir,
-        "--adoption-selection",
-        adoptionSelection,
-        "--seed-cli",
-        fakeCli,
-      ]),
-      seedstackDir,
-      adoptionSelection,
-    };
-    const reconcilePath = join(root, "reconcile.json");
-    writeJson(reconcilePath, { ok: true, decision: "manage_reconcile" });
-    const childPreScan = runScan(seedstackDir, 1, "queue-ops-child-pre-scan");
-    assertSelfTest(ok(childPreScan), "queue ops fixture child pre-scan ok");
-    const appliedClose = applyManageQueueOperations(seedstackDir, 1, "seed-test", childPreScan, reconcilePath, [
-      {
-        op_type: "close-current",
-        target_seed: "seed-test",
-        rationale: "done",
-        source_artifact_refs: [reconcilePath],
-        expected_preconditions: [
-          "seed seed-test is still open",
-          `latest dispatch reconcile result still matches ${reconcilePath}`,
-          "supervisor fresh queue state check finds no newer dispatch/manage artifact superseding this decision",
-        ],
-        details: {},
-      },
-    ]);
-    assertSelfTest(ok(appliedClose), "queue ops close apply succeeds");
-    assertSelfTest(
-      stringArray(appliedClose.warnings).some((item) => item.includes("unsupported precondition treated as advisory")),
-      "queue ops records advisory unsupported precondition warning",
-    );
-    assertSelfTest(stringArray(appliedClose.queue_dirty_paths).includes(".seeds/issues.jsonl"), "queue ops close ledger records dirty queue path");
-    const appliedCreate = applyManageQueueOperations(seedstackDir, 2, "seed-test", childPreScan, reconcilePath, [
-      {
-        op_type: "create-follow-up",
-        target_seed: "seed-test",
-        rationale: "follow-up needed",
-        source_artifact_refs: [reconcilePath],
-        expected_preconditions: [`latest dispatch reconcile result still matches ${reconcilePath}`],
-        details: { title: "Follow up", labels: ["impl"] },
-      },
-    ]);
-    assertSelfTest(ok(appliedCreate), "queue ops create apply succeeds");
-    assertSelfTest(stringArray(appliedCreate.after_seed_ids).includes("follow-1"), "queue ops after ids include created follow-up");
-    const runs = readFileSync(cliLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as JsonObject);
-    assertSelfTest(runs.every((run) => run.cwd === repo), "queue ops configured seed-cli cwd is repo");
-    assertSelfTest(runs.some((run) => Array.isArray(run.argv) && run.argv[0] === "close"), "queue ops fake cli saw close argv");
-    assertSelfTest(runs.some((run) => Array.isArray(run.argv) && run.argv[0] === "create"), "queue ops fake cli saw create argv");
-    const beforeFailed = runs.length;
-    const blocked = applyManageQueueOperations(seedstackDir, 3, "seed-test", childPreScan, join(root, "missing-reconcile.json"), [
-      {
-        op_type: "close-current",
-        target_seed: "seed-test",
-        rationale: "bad stale close",
-        source_artifact_refs: [join(root, "missing-reconcile.json")],
-        expected_preconditions: ["seed seed-test is still open"],
-        details: {},
-      },
-    ]);
-    assertSelfTest(!ok(blocked), "queue ops precondition failure blocks");
-    const afterFailed = readFileSync(cliLog, "utf8").trim().split(/\r?\n/).length;
-    assertSelfTest(afterFailed === beforeFailed + 4, "queue ops precondition failure performs fresh scan only");
-    const beforeMulti = afterFailed;
-    const multiBlocked = applyManageQueueOperations(seedstackDir, 4, "seed-test", childPreScan, reconcilePath, [
-      {
-        op_type: "create-follow-up",
-        target_seed: "seed-test",
-        rationale: "first",
-        source_artifact_refs: [reconcilePath],
-        expected_preconditions: [`latest dispatch reconcile result still matches ${reconcilePath}`],
-        details: { title: "First" },
-      },
-      {
-        op_type: "create-follow-up",
-        target_seed: "seed-test",
-        rationale: "second",
-        source_artifact_refs: [reconcilePath],
-        expected_preconditions: [`latest dispatch reconcile result still matches ${reconcilePath}`],
-        details: { title: "Second" },
-      },
-    ]);
-    assertSelfTest(!ok(multiBlocked), "queue ops multi-mutation batch blocks");
-    const afterMulti = readFileSync(cliLog, "utf8").trim().split(/\r?\n/).length;
-    assertSelfTest(afterMulti === beforeMulti + 4, "queue ops multi-mutation block performs fresh scan only");
-  } finally {
-    optionsGlobal = previousOptions;
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-function runPerSeedCommitRecoverySelfTest(): void {
-  const root = mkdtempSync(join(tmpdir(), "seedstack-commit-recovery-"));
-  try {
-    const metadata: PerSeedCommitMetadata = {
-      commit: "abc123",
-      worktreeRoot: join(root, "repo"),
-      branch: "main",
-      headBefore: "def456",
-      headAfter: "abc123",
-      gitCommonDir: join(root, "repo", ".git"),
-      changedPathAllowlist: ["src/seed.txt", ".seeds/issues.jsonl"],
-    };
-    const recovery = writePerSeedCommitRecoveryArtifact(root, 7, "seed-recovery", "run_state_update", metadata, {
-      error: "fixture update failed",
-    });
-    const parsed = readJson(recovery);
-    assertSelfTest(isObject(parsed), "commit recovery artifact is object");
-    assertSelfTest(parsed.contract === "per_seed_commit_recovery.v1", "commit recovery artifact contract");
-    assertSelfTest(parsed.recoverable === true, "commit recovery artifact is recoverable");
-    assertSelfTest(parsed.commit === metadata.commit, "commit recovery artifact records commit");
-    assertSelfTest(parsed.run_state === statePath(root), "commit recovery artifact records run-state path");
-    const recoveryInfo = isObject(parsed.recovery) ? parsed.recovery : {};
-    const expected = isObject(recoveryInfo.expected_latest_dispatch) ? recoveryInfo.expected_latest_dispatch : {};
-    assertSelfTest(expected.commit_pending === false && expected.commit === metadata.commit, "commit recovery artifact records expected state");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-function writeSupervisorFixtureCodex(path: string, sourceRepo: string): void {
-  writeFileSync(
-    path,
-    `#!/usr/bin/env bun
-import { mkdirSync, appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { makeFixtureRound } from ${JSON.stringify(`${sourceRepo}/.devcontainer/skills/dispatch-work/scripts/validate-dispatch-work-fixtures.ts`)};
-
-const result = process.env.SEEDSTACK_RESULT_FILE;
-if (!result) process.exit(2);
-const repo = process.cwd();
-const match = /-(dispatch|manage)-(.+)\\.result\\.json$/.exec(result);
-const role = match?.[1] ?? "unknown";
-const seed = match?.[2] ?? "seed-test";
-const log = process.env.SEEDSTACK_FIXTURE_LAUNCH_LOG;
-if (log) appendFileSync(log, JSON.stringify({ role, cwd: repo, argv: process.argv.slice(2), result }) + "\\n");
-
-if (role === "dispatch") {
-  mkdirSync(join(repo, "src"), { recursive: true });
-  const round = join(repo, "tmp", "dispatch-work", seed, "round-1");
-  makeFixtureRound(repo, seed, round, "pass", "close", true, "child_run_status.v2", undefined, "review-r1-a1.md", true, "pid:" + process.pid, true, "supervisor");
-  for (const prompt of ["execute-prompt.md", "implement-a1-prompt.md", "review-r1-a1-prompt.md", "verify-1-prompt.md"]) {
-    const promptPath = join(round, prompt);
-    writeFileSync(promptPath, readFileSync(promptPath, "utf8").replace(/repo_edit_roots=""/g, 'repo_edit_roots="src"'));
-  }
-  const dispatchRoot = join(repo, "tmp", "dispatch-work", seed);
-  const roundRel = "tmp/dispatch-work/" + seed + "/round-1";
-  writeFileSync(join(round, "executor-report.md"), [
-    "## Summary",
-    "status: pass",
-    "changed_files: none",
-    "tests: fixture dispatch artifacts generated",
-    "blockers: none",
-    "next_action: close",
-    "",
-    "Verdict: pass",
-    "Recommendation: close",
-    "",
-  ].join("\\n"));
-  writeFileSync(join(round, "implement-a1-report.md"), [
-    "## Summary",
-    "status: done",
-    "changed_files: none",
-    "tests: fixture dispatch artifacts generated",
-    "blockers: none",
-    "next_action: close",
-    "",
-    "Outcome: done",
-    "Recommendation: close",
-    "",
-  ].join("\\n"));
-  writeFileSync(join(round, "review-r1-a1.md"), [
-    "## Summary",
-    "status: pass",
-    "changed_files: none",
-    "tests: fixture dispatch artifacts inspected",
-    "blockers: none",
-    "next_action: close",
-    "",
-    "Verdict: pass",
-    "Recommendation: close",
-    "",
-  ].join("\\n"));
-  writeFileSync(join(round, "verify-1.md"), [
-    "## Summary",
-    "status: pass",
-    "changed_files: none",
-    "tests: fixture dispatch artifacts inspected",
-    "blockers: none",
-    "next_action: close",
-    "",
-    "Verdict: pass",
-    "",
-  ].join("\\n"));
-  writeFileSync(join(dispatchRoot, "knowledge-capture.md"), [
-    "capture_state=none_qualified",
-    "store_count: 0",
-    "merge_union: true",
-    "marker_count: 0",
-    "artifacts_reviewed: 4",
-    "candidate_count: 0",
-    "rejected_count: 0",
-    "none_rationale: No durable cross-session knowledge candidates in fixture artifacts.",
-    "",
-  ].join("\\n"));
-  writeFileSync(join(dispatchRoot, "gate.md"), [
-    "# Gate: " + seed,
-    "",
-    "decision: close",
-    "",
-    "## Evidence Paths",
-    "| path | outcome |",
-    "|------|---------|",
-    "| " + roundRel + "/executor-report.md | pass |",
-    "| " + roundRel + "/implement-a1-report.md | done |",
-    "| " + roundRel + "/review-r1-a1.md | pass |",
-    "| " + roundRel + "/verify-1.md | pass |",
-    "",
-    "## Gate Checks",
-    "| command | cwd | exit_code | status |",
-    "|---|---|---|---|",
-    "| bun test fixture | " + process.cwd() + " | 0 | pass |",
-    "",
-    "## Dirty Guard",
-    "- command: git status --porcelain=v1 --untracked-files=all",
-    "- snapshot: loop supervisor snapshot",
-    "- implementation paths: none",
-    "- queue paths: none",
-    "- unexpected paths: none",
-    "",
-    String.fromCharCode(96, 96, 96) + "json",
-    JSON.stringify({
-      contract: "dirty_guard.v1",
-      baseline_paths: [],
-      actual_impl_paths: [],
-      queue_paths: [],
-      unexpected_paths: [],
-      snapshot_path: "loop supervisor snapshot",
-    }, null, 2),
-    String.fromCharCode(96, 96, 96),
-    "",
-  ].join("\\n"));
-  writeFileSync(result, JSON.stringify({
-    contract: "seedstack_child_result.v1",
-    ok: true,
-    role: "dispatch",
-    seed,
-    decision: "closed",
-    round_path: roundRel,
-    followups_requested: 0,
-    followups_created: [],
-  }, null, 2) + "\\n");
-} else if (role === "manage") {
-  writeFileSync(result, JSON.stringify({
-    contract: "seedstack_child_result.v1",
-    ok: true,
-    role: "manage",
-    seed,
-    decision: "done",
-    followups_requested: 0,
-    followups_created: [],
-    proposed_queue_operations: [{
-      op_type: "close-current",
-      target_seed: seed,
-      rationale: "fixture dispatch closed cleanly",
-      source_artifact_refs: [result],
-      expected_preconditions: ["seed " + seed + " is still open", "latest dispatch reconcile result still matches fixture"],
-      details: {},
-    }],
-  }, null, 2) + "\\n");
-} else {
-  process.stderr.write("unknown role for " + result + "\\n");
-  process.exit(2);
-}
-`,
-  );
-  chmodSync(path, 0o755);
-}
-
-function writeSupervisorFixtureSeedCli(path: string, stateFile: string, logFile: string): void {
-  writeFileSync(
-    path,
-    `#!/usr/bin/env bun
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-const stateFile = ${JSON.stringify(stateFile)};
-const logFile = ${JSON.stringify(logFile)};
-const args = process.argv.slice(2);
-appendFileSync(logFile, JSON.stringify({ cwd: process.cwd(), argv: args }) + "\\n");
-const state = JSON.parse(readFileSync(stateFile, "utf8"));
-const command = args[0];
-const issueFor = (id) => state.issues.find((issue) => issue.id === id);
-const writeState = () => {
-  writeFileSync(stateFile, JSON.stringify(state, null, 2) + "\\n");
-  writeFileSync(join(process.cwd(), ".seeds", "issues.jsonl"), state.issues.map((issue) => JSON.stringify(issue)).join("\\n") + "\\n");
-};
-const envelope = (data) => JSON.stringify({ ok: true, command, data }) + "\\n";
-if (command === "health") process.stdout.write(envelope({ summary: { pass: 1, warning: 0, error: 0 }, checks: [] }));
-else if (command === "list") process.stdout.write(envelope({ count: state.issues.length, issues: state.issues }));
-else if (command === "ready") process.stdout.write(envelope({ count: state.issues.filter((issue) => issue.status !== "closed").length, issues: state.issues.filter((issue) => issue.status !== "closed") }));
-else if (command === "blocked") process.stdout.write(envelope({ count: 0, issues: [] }));
-else if (command === "close") {
-  const issue = issueFor(args[1]);
-  if (!issue) process.exit(3);
-  issue.status = "closed";
-  writeState();
-  process.stdout.write(JSON.stringify({ ok: true, command, id: args[1] }) + "\\n");
-} else if (command === "create") {
-  process.stderr.write("fixture does not create follow-ups\\n");
-  process.exit(2);
-} else {
-  process.stderr.write("unsupported " + command + "\\n");
-  process.exit(2);
-}
-`,
-  );
-  chmodSync(path, 0o755);
-}
-
-function setupSupervisorFixtureRepo(root: string): { repo: string; linked: string; seed: string } {
-  const repo = join(root, "repo");
-  const seed = "seed-test";
-  mkdirSync(join(repo, ".seeds"), { recursive: true });
-  mkdirSync(join(repo, "src"), { recursive: true });
-  writeFileSync(join(repo, "README.md"), "fixture\\n");
-  writeFileSync(join(repo, "src", "fixture.txt"), "initial\\n");
-  writeFileSync(join(repo, ".seeds", "issues.jsonl"), `${JSON.stringify({
-    id: seed,
-    title: "Fixture seed",
-    status: "open",
-    description: "Fixture seed\n\narea: src\n",
-    labels: ["impl"],
-    priority: 1,
-    createdAt: "2026-01-01T00:00:00Z",
-  })}\\n`);
-  runGitSelfTest(repo, ["init", "-b", "main"]);
-  runGitSelfTest(repo, ["config", "user.email", "seedstack@example.test"]);
-  runGitSelfTest(repo, ["config", "user.name", "Seedstack Test"]);
-  runGitSelfTest(repo, ["add", "."]);
-  runGitSelfTest(repo, ["commit", "-m", "fixture init"]);
-  const linked = join(root, "linked");
-  runGitSelfTest(repo, ["worktree", "add", "-b", "fixture-linked", linked]);
-  return { repo, linked, seed };
-}
-
-function runSupervisorFixture(root: string, repo: string, seed: string, fixtureName: string): JsonObject {
-  const seedstackDir = join(repo, "tmp", "seedstack", fixtureName);
-  const adoptionSelection = join(seedstackDir, "adoption-selection.json");
-  const stateFile = join(root, `${fixtureName}-seed-cli-state.json`);
-  const seedCliLog = join(root, `${fixtureName}-seed-cli.jsonl`);
-  const launchLog = join(root, `${fixtureName}-child-launch.jsonl`);
-  const fakeSeedCli = join(root, `${fixtureName}-seed-cli`);
-  const fakeCodex = join(root, `${fixtureName}-codex`);
-  mkdirSync(seedstackDir, { recursive: true });
-  writeJson(adoptionSelection, { adopted_seed_ids: [seed], excluded_open_seed_ids: [] });
-  writeJson(stateFile, {
-    issues: [{ id: seed, title: "Fixture seed", status: "open", description: "Fixture seed\n\narea: src\n", labels: ["impl"], priority: 1, createdAt: "2026-01-01T00:00:00Z" }],
-  });
-  writeSupervisorFixtureSeedCli(fakeSeedCli, stateFile, seedCliLog);
-  writeSupervisorFixtureCodex(fakeCodex, WORKSPACE_ROOT);
-  const result = spawnSync(process.execPath, [
-    fileURLToPath(import.meta.url),
-    "--repo",
-    repo,
-    "--seedstack-dir",
-    seedstackDir,
-    "--adoption-selection",
-    adoptionSelection,
-    "--seed-cli",
-    fakeSeedCli,
-    "--codex-bin",
-    fakeCodex,
-    "--commit-policy",
-    "per_seed",
-    "--knowledge-capture",
-    "audit",
-    "--post-seed-delay-ms",
-    "1",
-    "--max-iterations",
-    "8",
-    "--pretty",
-  ], {
-    cwd: optionsGlobal.repo,
-    encoding: "utf8",
-    maxBuffer: 50 * 1024 * 1024,
-    env: { ...process.env, SEEDSTACK_FIXTURE_LAUNCH_LOG: launchLog },
-  });
-  const validationDebug = existsSync(loopDir(seedstackDir))
-    ? readdirSync(loopDir(seedstackDir))
-      .filter((file) => file.includes("dispatch-work-validation"))
-      .map((file) => `${file}: ${readFileSync(join(loopDir(seedstackDir), file), "utf8").slice(0, 4000)}`)
-      .join("\n")
-    : "";
-  const childDebug = existsSync(loopDir(seedstackDir))
-    ? readdirSync(loopDir(seedstackDir))
-      .filter((file) => file.endsWith(".log"))
-      .map((file) => `${file}: ${readFileSync(join(loopDir(seedstackDir), file), "utf8").slice(0, 4000)}`)
-      .join("\n")
-    : "";
-  assertSelfTest((result.status ?? 1) === 0, `${fixtureName} supervisor exits cleanly: ${result.stderr || result.stdout}\n${validationDebug}\n${childDebug}`);
-  const finalLine = result.stdout.trim().split(/\r?\n/).filter(Boolean).pop() ?? "{}";
-  const parsed = JSON.parse(finalLine) as JsonObject;
-  assertSelfTest(parsed.ok === true && parsed.state === "done", `${fixtureName} supervisor reaches done`);
-  const seedCliRuns = readFileSync(seedCliLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as JsonObject);
-  const childRuns = readFileSync(launchLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as JsonObject);
-  assertSelfTest(seedCliRuns.length > 0 && seedCliRuns.every((run) => run.cwd === repo), `${fixtureName} seed-cli cwd uses target repo`);
-  assertSelfTest(childRuns.some((run) => run.role === "dispatch" && run.cwd === repo), `${fixtureName} dispatch child cwd uses target repo`);
-  assertSelfTest(childRuns.some((run) => run.role === "manage" && run.cwd === repo), `${fixtureName} manage child cwd uses target repo`);
-  assertSelfTest(existsSync(join(seedstackDir, "commit-ledger.md")), `${fixtureName} commit ledger written`);
-  const runState = JSON.parse(readFileSync(statePath(seedstackDir), "utf8")) as JsonObject;
-  const worktree = isObject(runState.worktree) ? runState.worktree : {};
-  assertSelfTest(worktree.worktree_root === repo, `${fixtureName} run-state worktree root uses target repo`);
-  const ledger = readFileSync(join(seedstackDir, "commit-ledger.md"), "utf8");
-  assertSelfTest(ledger.includes(repo), `${fixtureName} commit ledger records target worktree root`);
-  assertSelfTest(ledger.includes(".seeds/issues.jsonl"), `${fixtureName} commit ledger records queue changed path allowlist`);
-  return { seedstackDir, seedCliLog, launchLog, final: parsed };
-}
-
-function runLinkedWorktreeSupervisorFixtureSelfTest(): void {
-  const root = mkdtempSync(join(tmpdir(), "seedstack-linked-supervisor-"));
-  try {
-    const { repo, linked, seed } = setupSupervisorFixtureRepo(root);
-    const previousOptions = optionsGlobal;
-    optionsGlobal = parseArgs(["--repo", repo]);
-    try {
-      runSupervisorFixture(root, repo, seed, "main-fixture");
-      runSupervisorFixture(root, linked, seed, "linked-fixture");
-      const duplicate = join(root, "linked-duplicate");
-      runGitSelfTest(repo, ["worktree", "add", "--force", duplicate, "fixture-linked"]);
-      const duplicateSeedstackDir = join(linked, "tmp", "seedstack", "duplicate-fixture");
-      const duplicateAdoption = join(duplicateSeedstackDir, "adoption-selection.json");
-      const duplicateState = join(root, "duplicate-state.json");
-      const duplicateSeedCliLog = join(root, "duplicate-seed-cli.jsonl");
-      const duplicateChildLog = join(root, "duplicate-child.jsonl");
-      const duplicateSeedCli = join(root, "duplicate-seed-cli");
-      const duplicateCodex = join(root, "duplicate-codex");
-      mkdirSync(duplicateSeedstackDir, { recursive: true });
-      writeJson(duplicateAdoption, { adopted_seed_ids: [seed], excluded_open_seed_ids: [] });
-      writeJson(duplicateState, { issues: [{ id: seed, status: "open", description: "Fixture seed\n\narea: src\n", labels: ["impl"], priority: 1, createdAt: "2026-01-01T00:00:00Z" }] });
-      writeSupervisorFixtureSeedCli(duplicateSeedCli, duplicateState, duplicateSeedCliLog);
-      writeSupervisorFixtureCodex(duplicateCodex, WORKSPACE_ROOT);
-      const blocked = spawnSync(process.execPath, [
-        fileURLToPath(import.meta.url),
-        "--repo",
-        linked,
-        "--seedstack-dir",
-        duplicateSeedstackDir,
-        "--adoption-selection",
-        duplicateAdoption,
-        "--seed-cli",
-        duplicateSeedCli,
-        "--codex-bin",
-        duplicateCodex,
-        "--max-iterations",
-        "1",
-      ], {
-        cwd: repo,
-        encoding: "utf8",
-        maxBuffer: 10 * 1024 * 1024,
-        env: { ...process.env, SEEDSTACK_FIXTURE_LAUNCH_LOG: duplicateChildLog },
-      });
-      assertSelfTest((blocked.status ?? 0) !== 0, "same-branch duplicate linked worktree blocks supervisor");
-      assertSelfTest((blocked.stdout + blocked.stderr).includes("same-branch"), "duplicate linked worktree error mentions policy");
-      assertSelfTest(!existsSync(duplicateSeedCliLog), "duplicate linked worktree blocks before seed-cli queue mutation");
-      assertSelfTest(!existsSync(duplicateChildLog), "duplicate linked worktree blocks before child launch");
-    } finally {
-      optionsGlobal = previousOptions;
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-async function selfTest(pretty: boolean): Promise<never> {
-  const parsed = parseArgs([
-    "--child-total-timeout-ms",
-    "123",
-    "--child-silent-timeout-ms=45",
-    "--child-silent-probe-ms",
-    "6",
-    "--post-seed-delay-ms=25",
-  ]);
-  assertSelfTest(parsed.childTotalTimeoutMs === 123, "total timeout arg parse");
-  assertSelfTest(parsed.childSilentTimeoutMs === 45, "silent timeout equals arg parse");
-  assertSelfTest(parsed.childSilentProbeMs === 6, "silent probe arg parse");
-  assertSelfTest(parsed.postSeedDelayMs === 25, "post-seed delay equals arg parse");
-  assertSelfTest(parsed.commitPolicy === "per_seed", "auto commit policy default");
-  assertSelfTest(parsed.knowledgeCapture === "audit", "knowledge capture default");
-  const recordKnowledge = parseArgs(["--knowledge-capture", "record", "--knowledge-required"]);
-  assertSelfTest(recordKnowledge.knowledgeCapture === "record", "knowledge capture arg parse");
-  assertSelfTest(recordKnowledge.knowledgeRequired, "knowledge required arg parse");
-  const offKnowledge = parseArgs(["--knowledge-capture=off"]);
-  assertSelfTest(offKnowledge.knowledgeCapture === "off", "knowledge capture equals arg parse");
-  const manualDefault = parseArgs(["--mode", "manual"]);
-  assertSelfTest(manualDefault.commitPolicy === "none", "manual commit policy default");
-  const explicitNone = parseArgs(["--commit-policy", "none"]);
-  assertSelfTest(explicitNone.commitPolicy === "none", "explicit none commit policy");
-  assertSelfTest(parsed.codexReasoningEffort === "medium", "reasoning effort default");
-  const lowReasoning = parseArgs(["--codex-reasoning-effort", "low"]);
-  assertSelfTest(lowReasoning.codexReasoningEffort === "low", "reasoning effort arg parse");
-  const xhighReasoning = parseArgs(["--codex-reasoning-effort=xhigh"]);
-  assertSelfTest(xhighReasoning.codexReasoningEffort === "xhigh", "reasoning effort equals arg parse");
-  assertSelfTest(parsed.runner === "codex", "runner default");
-  assertSelfTest(parsed.claudeBin === "claude", "claude bin default");
-  assertSelfTest(parsed.claudeModel === "claude-sonnet-4-6", "claude model default");
-  const claudeParsed = parseArgs(["--runner", "claude", "--claude-model", "claude-haiku-4-5-20251001"]);
-  assertSelfTest(claudeParsed.runner === "claude", "claude runner parse");
-  assertSelfTest(claudeParsed.claudeModel === "claude-haiku-4-5-20251001", "claude model parse");
-  const clamped = parseArgs(["--child-silent-timeout-ms", "50"]);
-  assertSelfTest(clamped.childSilentProbeMs === 50, "silent probe clamps to timeout");
-  try {
-    parseArgs(["--post-seed-delay-ms", "-1"]);
-    assertSelfTest(false, "invalid post-seed delay rejected");
-  } catch (error) {
-    assertSelfTest(String((error as Error).message).includes("post-seed-delay-ms"), "invalid post-seed delay error");
-  }
-  try {
-    parseArgs(["--child-total-timeout-ms", "0"]);
-    assertSelfTest(false, "invalid timeout rejected");
-  } catch (error) {
-    assertSelfTest(String((error as Error).message).includes("positive"), "invalid timeout error");
-  }
-  try {
-    parseArgs(["--codex-reasoning-effort", "turbo"]);
-    assertSelfTest(false, "invalid reasoning effort rejected");
-  } catch (error) {
-    assertSelfTest(String((error as Error).message).includes("codex-reasoning-effort"), "invalid reasoning effort error");
-  }
-  try {
-    parseArgs(["--knowledge-capture", "maybe"]);
-    assertSelfTest(false, "invalid knowledge capture rejected");
-  } catch (error) {
-    assertSelfTest(String((error as Error).message).includes("knowledge-capture"), "invalid knowledge capture error");
-  }
-  try {
-    runStateName({ state: "dispatch" });
-    assertSelfTest(false, "invalid run-state rejected");
-  } catch (error) {
-    assertSelfTest(String((error as Error).message).includes("invalid_run_state"), "invalid run-state error");
-  }
-  assertSelfTest(beforeFirstDispatch({ state: "idle" }), "empty idle run-state is before first dispatch");
-  assertSelfTest(!beforeFirstDispatch({ state: "idle", loop_iteration: 1 }), "loop iteration marks dispatch started");
-  assertSelfTest(!beforeFirstDispatch({ state: "idle", dispatch_attempts: { S1: 1 } }), "dispatch attempt marks dispatch started");
-  assertSelfTest(!beforeFirstDispatch({ state: "idle", latest_dispatch: { seed_id: "S1" } }), "latest dispatch marks dispatch started");
-  runWorktreePreflightSelfTest();
-  runLoopIterationAllocationSelfTest();
-  runArtifactRecoveryFixtureSelfTest();
-  runLoopDirtyGuardPolicyFixtureSelfTest();
-  runMissingResultRecoverySelfTest();
-  runManageQueueOpsSelfTest();
-  runPerSeedCommitRecoverySelfTest();
-  runLinkedWorktreeSupervisorFixtureSelfTest();
-  const queueDirty = queueDirtyPathsFromStatus([
-    " M .seeds/issues.jsonl",
-    "?? .seeds/knowledge.jsonl",
-    " M .seeds/deps.jsonl",
-    "R  .seeds/issues.jsonl -> .seeds/knowledge.jsonl",
-    " M src/app.ts",
-    "",
-  ].join("\n"));
-  assertSelfTest(
-    queueDirty.length === 2 && queueDirty.includes(".seeds/issues.jsonl") && queueDirty.includes(".seeds/deps.jsonl"),
-    "queue dirty preflight excludes knowledge and includes queue paths",
-  );
-  const commitCandidates = commitCandidatePaths({
-    paths: [
-      { path: ".seeds/issues.jsonl", classification: "dispatcher_owned" },
-      { path: ".seeds/knowledge.jsonl", classification: "capture_owned" },
-      { path: "src/owned.ts", classification: "expected_seed" },
-    ],
-  });
-  assertSelfTest(
-    commitCandidates.join(",") === ".seeds/issues.jsonl,src/owned.ts",
-    "commit candidates exclude capture-owned knowledge",
-  );
-  const knowledgeRepo = mkdtempSync(join(tmpdir(), "seedstack-knowledge-"));
-  try {
-    const init = spawnSync("git", ["init"], { cwd: knowledgeRepo, encoding: "utf8" });
-    assertSelfTest((init.status ?? 1) === 0, "knowledge self-test git init");
-    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-empty"), { recursive: true });
-    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-empty", "knowledge-capture.md"), [
-      "capture_state=none_qualified",
-      "store_count: 0",
-      "merge_union: true",
-      "marker_count: 0",
-      "artifacts_reviewed: 4",
-      "candidate_count: 0",
-      "rejected_count: 0",
-      "none_rationale: No durable cross-session knowledge candidates in fixture artifacts.",
-      "",
-    ].join("\n"));
-    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-shallow"), { recursive: true });
-    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-shallow", "knowledge-capture.md"), "capture_state=none_qualified\naccepted IDs: []\n");
-    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-status-only"), { recursive: true });
-    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-status-only", "knowledge-capture.md"), "status: none_qualified\naccepted IDs: []\n");
-    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-invalid"), { recursive: true });
-    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-invalid", "knowledge-capture.md"), "\n");
-    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-recorded"), { recursive: true });
-    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-recorded", "knowledge-capture.md"), [
-      "capture_state=recorded",
-      "```json",
-      "{\"accepted_records\":[{\"type\":\"failure\",\"content\":\"When X, beware Y. Cause: Z. Do: W. Verify: T. Limit: L.\"}]}",
-      "```",
-      "",
-    ].join("\n"));
-    const testOptions = parseArgs([
-      "--repo",
-      knowledgeRepo,
-      "--seedstack-dir",
-      "tmp/seedstack/test",
-      "--adoption-selection",
-      "tmp/seedstack/test/adoption-selection.json",
-      "--knowledge-required",
-    ]) as Options & { seedstackDir: string; adoptionSelection: string };
-    optionsGlobal = testOptions;
-    const missingAudit = baseKnowledgeCaptureCheck("seed-missing", "audit");
-    assertSelfTest(!ok(missingAudit) && stringField(missingAudit.state) === "audit_missing", "knowledge audit missing fails check");
-    assertSelfTest(knowledgeCaptureBlocksRequired(missingAudit), "required missing audit blocks");
-    const invalidAudit = baseKnowledgeCaptureCheck("seed-invalid", "audit");
-    assertSelfTest(!ok(invalidAudit) && stringField(invalidAudit.state) === "audit_invalid", "knowledge invalid audit rejected");
-    assertSelfTest(knowledgeCaptureBlocksRequired(invalidAudit), "required invalid audit blocks");
-    const shallowAudit = baseKnowledgeCaptureCheck("seed-shallow", "audit");
-    assertSelfTest(!ok(shallowAudit) && stringField(shallowAudit.state) === "audit_invalid", "knowledge shallow audit rejected");
-    assertSelfTest(knowledgeCaptureBlocksRequired(shallowAudit), "required shallow audit blocks");
-    const statusOnlyAudit = baseKnowledgeCaptureCheck("seed-status-only", "audit");
-    const statusOnlyAuditInfo = isObject(statusOnlyAudit.audit) ? statusOnlyAudit.audit : {};
-    assertSelfTest(!ok(statusOnlyAudit) && stringField(statusOnlyAudit.state) === "audit_invalid", "knowledge status-only none qualified rejected");
-    assertSelfTest(
-      Array.isArray(statusOnlyAuditInfo.errors) && statusOnlyAuditInfo.errors.includes("capture_state missing"),
-      "knowledge status-only none qualified reports capture_state missing",
-    );
-    assertSelfTest(knowledgeCaptureBlocksRequired(statusOnlyAudit), "required status-only none qualified blocks");
-    const emptyAudit = baseKnowledgeCaptureCheck("seed-empty", "audit");
-    assertSelfTest(ok(emptyAudit) && stringField(emptyAudit.state) === "none_qualified", "knowledge none qualified audit succeeds");
-    assertSelfTest(!knowledgeCaptureBlocksRequired(emptyAudit), "required none qualified audit passes");
-    const missingStore = recordKnowledgeCandidates(baseKnowledgeCaptureCheck("seed-recorded", "record"));
-    assertSelfTest(!ok(missingStore) && stringField(missingStore.state) === "store_missing", "record mode missing store state");
-    mkdirSync(join(knowledgeRepo, ".seeds"), { recursive: true });
-    writeFileSync(join(knowledgeRepo, ".seeds", ".gitattributes"), "knowledge.jsonl merge=union\n");
-    writeFileSync(join(knowledgeRepo, ".seeds", "knowledge.jsonl"), "{\"id\":\"ex-5e569a\",\"type\":\"guide\",\"content\":\"x\",\"recorded_at\":\"2026-01-01T00:00:00.000Z\"}\n");
-    const noneQualified = recordKnowledgeCandidates(baseKnowledgeCaptureCheck("seed-empty", "record"));
-    assertSelfTest(ok(noneQualified) && stringField(noneQualified.state) === "none_qualified", "record mode none qualified state");
-    assertSelfTest(!knowledgeCaptureBlocksRequired(noneQualified), "required none qualified record passes");
-    const auditOne = baseKnowledgeCaptureCheck("seed-empty", "audit");
-    const auditTwo = baseKnowledgeCaptureCheck("seed-empty", "audit");
-    assertSelfTest(JSON.stringify(auditOne) === JSON.stringify(auditTwo), "knowledge audit deterministic");
-    const storeInfo = isObject(auditOne.store) ? auditOne.store : {};
-    assertSelfTest(storeInfo.count === 1 && storeInfo.dirty === true && storeInfo.merge_union === true, "knowledge store state inspected");
-    mkdirSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-candidate"), { recursive: true });
-    writeFileSync(join(knowledgeRepo, "tmp", "dispatch-work", "seed-candidate", "knowledge-capture.md"), [
-      "capture_state=recorded",
-      "```json",
-      JSON.stringify({
-        accepted_records: [{ type: "failure", content: "When accepted, record this. Cause: Z. Do: W. Verify: T. Limit: L." }],
-        rejected_records: [{ type: "failure", content: "Rejected record must not be appended." }],
-      }),
-      "```",
-      "",
-    ].join("\n"));
-    const candidateAudit = baseKnowledgeCaptureCheck("seed-candidate", "audit");
-    const candidateAuditInfo = isObject(candidateAudit.audit) ? candidateAudit.audit : {};
-    assertSelfTest(candidateAuditInfo.structured_candidates_count === 1, "knowledge structured candidate parse");
-    const recorded = recordKnowledgeCandidates(baseKnowledgeCaptureCheck("seed-candidate", "record"));
-    assertSelfTest(ok(recorded) && stringField(recorded.state) === "recorded", "accepted_records append via store succeeds");
-    const finalStore = readFileSync(join(knowledgeRepo, ".seeds", "knowledge.jsonl"), "utf8");
-    assertSelfTest(finalStore.includes("When accepted, record this."), "accepted record appended");
-    assertSelfTest(!finalStore.includes("Rejected record must not be appended."), "rejected record not appended");
-    assertSelfTest(knowledgeStoreLineCount(knowledgeStorePath()).count === 2, "only accepted record appended");
-  } finally {
-    rmSync(knowledgeRepo, { recursive: true, force: true });
-  }
-  await runChildTimeoutSelfTest(assertSelfTest);
-  const dispatchPrompt = buildDispatchPrompt("/repo", "seed-test", "/result.json");
-  const noneQualifiedTemplate = dispatchPrompt.match(/Minimal valid none_qualified example:\n\n```text\n([\s\S]*?)\n```/)?.[1] ?? "";
-  const promptTemplateValidation = validateKnowledgeCaptureText(noneQualifiedTemplate);
-  assertSelfTest(promptTemplateValidation.ok, "dispatch prompt none qualified template validates", promptTemplateValidation.errors);
-  assertSelfTest(
-    noneQualifiedTemplate.trim() === VALID_NONE_QUALIFIED_KNOWLEDGE_CAPTURE.trim(),
-    "dispatch prompt embeds shared none qualified template",
-  );
-  assertSelfTest(dispatchPrompt.includes("outer supervised exec (Codex or Claude Code CLI) managed by seedstack"), "dispatch prompt explains outer supervision");
-  assertSelfTest(dispatchPrompt.includes("native agent-spawn tool (spawn_agent for Codex, Agent tool for Claude Code) only if it returns a real child id"), "dispatch prompt requires real spawn_agent id");
-  assertSelfTest(dispatchPrompt.includes("Never fabricate liveness handles"), "dispatch prompt forbids fabricated liveness");
-  assertSelfTest(dispatchPrompt.includes("not child_run_status evidence"), "dispatch prompt separates seedstack result from child status evidence");
-  assertSelfTest(!dispatchPrompt.includes('"decision": "closed|blocked|escalated|crashed",'), "dispatch prompt avoids literal enum example");
-  const managePrompt = buildManagePrompt({
-    repo: "/repo",
-    seedstackDir: "/stack",
-    followupsPerManage: 2,
-    seed: "seed-test",
-    reconcileFile: "/reconcile.json",
-    resultFile: "/result.json",
-    remainingFollowups: 3,
-  });
-  assertSelfTest(managePrompt.includes("retry_same_seed, continue_other_seeds, blocked, done"), "manage prompt lists retry policy enum");
-  assertSelfTest(!managePrompt.includes('"decision": "continue"'), "manage prompt avoids legacy continue decision");
-  const gatePaths = parseGateExpectedSeedPaths([
-    "## Dirty Guard",
-    "- known dirty paths before close: `.seeds/issues.jsonl` (dispatcher claim), `impl/rust/tests/cli.rs` (implementation)",
-    "- artifact: `tmp/dispatch-work/seed/gate.md`",
-    "- status words: `close`, `pass`",
-    "outside bullet `impl/rust/src/lib.rs`",
-    "## Review",
-  ].join("\n"));
-  assertSelfTest(gatePaths.length === 1 && gatePaths[0] === "impl/rust/tests/cli.rs", "gate dirty paths parse");
-  const yamlGatePaths = parseGateExpectedSeedPaths([
-    "dirty_guard:",
-    "- .seeds/issues.jsonl dirty from dispatcher claim only.",
-    "- implementation changes limited to seedspec/impl_v2/rust/src/main.rs and impl_v2/rust/tests/list_labels.rs.",
-    "",
-    "final_rationale:",
-    "- ignore impl_v2/rust/src/not_dirty.rs here.",
-  ].join("\n"));
-  assertSelfTest(
-    yamlGatePaths.length === 2 &&
-      yamlGatePaths.includes("impl_v2/rust/src/main.rs") &&
-      yamlGatePaths.includes("impl_v2/rust/tests/list_labels.rs"),
-    "gate dirty_guard yaml paths parse",
-  );
-  const devcontainerGatePaths = parseGateExpectedSeedPaths([
-    "## Dirty Guard",
-    "- implementation paths: .devcontainer/skills/seedstack/scripts/seedstack-loop.ts",
-    "```json",
-    JSON.stringify({
-      contract: "dirty_guard.v1",
-      actual_impl_paths: [".devcontainer/skills/seedstack/scripts/seedstack-loop.ts"],
-    }),
-    "```",
-  ].join("\n"));
-  assertSelfTest(
-    devcontainerGatePaths.includes(".devcontainer/skills/seedstack/scripts/seedstack-loop.ts") &&
-      !devcontainerGatePaths.includes("skills/seedstack/scripts/seedstack-loop.ts"),
-    "gate dirty paths preserve dot-prefixed root",
-  );
-
-  const result = {
-    contract: "seedstack_loop_self_test.v1",
-    ok: true,
-    checks: [
-      "args_parse",
-      "post_seed_delay_args_parse",
-      "child_timeout_args_parse",
-      "child_silent_probe_clamp",
-      "child_timeout_watchdog",
-      "child_total_timeout",
-      "invalid_run_state",
-      "preexisting_queue_dirty_before_auto_run",
-      "knowledge_capture_args",
-      "knowledge_capture_required",
-      "knowledge_capture_audit",
-      "knowledge_capture_record_none",
-      "child_result_contract",
-      "child_launch_provenance",
-      "dispatch_prompt_launch_provenance",
-      "gate_dirty_expected_paths",
-      "worktree_preflight_policy",
-      "loop_state_contract",
-      "loop_iteration_allocation",
-      "artifact_recovery_fixtures",
-      "loop_dirty_guard_policy_fixture",
-      "missing_result_recovery_fixture",
-      "manage_queue_ops_fixture",
-      "per_seed_commit_recovery_fixture",
-      "linked_worktree_supervisor_fixture",
-    ],
-  };
-  process.stdout.write(`${JSON.stringify(result, null, pretty ? 2 : 0)}\n`);
-  process.exit(0);
-}
+// ── Entry point ──────────────────────────────────────────────────────────────
 
 let options: Options;
 try {
   options = parseArgs(process.argv.slice(2));
-  if (options.selfTest) await selfTest(options.pretty);
+  if (options.selfTest) {
+    await selfTestFn(options.pretty, {
+      getOptionsGlobal,
+      setOptionsForTest,
+      loadLoopState,
+      allocateSupervisorIteration,
+      artifact,
+      resultPath,
+      runScan,
+      ok,
+      applyManageQueueOperations,
+      recoverMissingDispatchChildResult,
+      writePerSeedCommitRecoveryArtifact,
+      runGit,
+      commitCandidatePaths,
+      parseGateExpectedSeedPaths,
+      beforeFirstDispatch,
+      runStateName,
+      dispatchValidatorPath,
+      snapshotDirtyState,
+      dispatchWorkValidate,
+    });
+  }
   ensureInputs(options);
   optionsGlobal = options;
   await runLoop();
