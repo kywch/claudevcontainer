@@ -401,6 +401,10 @@ ambiguity cheaply.
   Source references are provenance annotations, not part of the contract. If a
   clause requires the reader to follow an evidence link to understand required
   behavior, the clause is incomplete.
+- Glossaries should read like Seeds by default: start with a short authority
+  note, then use domain-grouped section titles such as `Primitives`,
+  `Predicates`, `Operations`, and `Infrastructure` when they help scanning.
+  Reserve a flat `Terms` section for tiny specs only.
 - Number normative clauses with stable IDs.
 - Every decision records context, decision, consequences, conformance impact,
   model impact, and references.

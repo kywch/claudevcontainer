@@ -1,9 +1,9 @@
 # Glossary
 
-This file is normative. If term usage elsewhere conflicts with this glossary,
-this glossary wins.
+This file is normative. If a term's usage elsewhere conflicts with this
+glossary, this glossary wins and the other source should be updated.
 
-## Terms
+## Primitives
 
 - **Flag**: A named boolean value.
 - **Flag key**: A non-empty string identifying a flag.

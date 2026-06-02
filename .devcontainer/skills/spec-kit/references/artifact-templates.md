@@ -65,10 +65,14 @@ is incorporated into clauses, keep the decision consistent or mark it superseded
 ```markdown
 # Glossary
 
-This file is normative. If term usage elsewhere conflicts with this glossary,
-this glossary wins.
+This file is normative. If a term's usage elsewhere conflicts with this
+glossary, this glossary wins and the other source should be updated.
 
-## Terms
+Prefer domain-grouped sections like `## Primitives`, `## Predicates`,
+`## Operations`, and `## Infrastructure` when the spec has enough surface area.
+Use `## Terms` only for very small specs.
+
+## Primitives
 
 - **Term**: Definition. Source: `spec/behavior.md#b1`.
 

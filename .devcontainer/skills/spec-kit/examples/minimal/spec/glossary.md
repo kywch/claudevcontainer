@@ -1,9 +1,9 @@
 # Glossary
 
-This file is normative. If term usage elsewhere conflicts with this glossary,
-this glossary wins.
+This file is normative. If a term's usage elsewhere conflicts with this
+glossary, this glossary wins and the other source should be updated.
 
-## Terms
+## Primitives
 
 - **Input string**: The text to count.
 - **Token**: A non-empty span between ASCII whitespace delimiters.
