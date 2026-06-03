@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 type Gate = { raw: string };
 type CardValue = string | string[] | Gate[];
 type Card = Record<string, CardValue> & { gates?: Gate[] };
+type PathRef = { path: string; source: string };
 
 function usage(exitCode: 0 | 2): never {
   const stream = exitCode === 0 ? process.stdout : process.stderr;
@@ -250,6 +251,115 @@ function gateText(card: Card): string {
   return [...gates, ...targetGates].join("\n");
 }
 
+function gateCommands(card: Card): string[] {
+  const gates = Array.isArray(card.gates) ? card.gates : [];
+  return gates
+    .filter((gate) => {
+      const type = gateField(gate.raw, "type")?.toLowerCase();
+      return type !== "review" && type !== "full";
+    })
+    .map((gate) => gateField(gate.raw, "command"))
+    .filter((value): value is string => Boolean(value));
+}
+
+function targetGateLines(card: Card): string[] {
+  return asStringArray(card.target_gates) ?? [];
+}
+
+function listLines(card: Card, field: string): string[] {
+  return asStringArray(card[field]) ?? [];
+}
+
+function stripPathDecorators(value: string): string {
+  return value
+    .trim()
+    .replace(/^['"`([{<]+/, "")
+    .replace(/[>'"`)\]},.;]+$/g, "")
+    .replace(/:\d+(?::\d+)?$/, "")
+    .replace(/^\.?\//, "")
+    .replace(/\/+$/, "");
+}
+
+function normalizePathToken(token: string): string | undefined {
+  let value = stripPathDecorators(token);
+  if (!value || value.includes("://") || value.startsWith("#")) return undefined;
+  if (/^[A-Z_][A-Z0-9_]*=/.test(value)) {
+    value = value.slice(value.indexOf("=") + 1);
+  }
+  value = stripPathDecorators(value);
+  if (!value || value.startsWith("-") || value.includes("://")) return undefined;
+  if (/[*?{}]/.test(value)) return undefined;
+  if (value.startsWith("$") || value.startsWith("~")) return undefined;
+  if (value.includes("=")) return undefined;
+  const looksLikePath =
+    value.includes("/") ||
+    value.startsWith(".") ||
+    /^[A-Za-z0-9._+-]+\.(?:[cm]?[jt]sx?|json|ya?ml|md|txt|qnt|sh|mjs|cjs|py|rs|go)$/.test(value);
+  if (!looksLikePath) return undefined;
+  if (!/^[A-Za-z0-9._+/@-]+$/.test(value)) return undefined;
+  return value;
+}
+
+function extractPathRefs(lines: string[], source: string): PathRef[] {
+  const refs: PathRef[] = [];
+  for (const line of lines) {
+    for (const token of line.split(/\s+/)) {
+      const path = normalizePathToken(token);
+      if (path) refs.push({ path, source });
+    }
+  }
+  return refs;
+}
+
+function rootCoversPath(root: string, path: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
+}
+
+function pathCoveredByRoots(path: string, roots: string[]): boolean {
+  return roots.some((root) => rootCoversPath(root, path));
+}
+
+function gateCoversAreaPath(gatePath: string, areaPath: string): boolean {
+  return rootCoversPath(areaPath, gatePath) || rootCoversPath(gatePath, areaPath);
+}
+
+function gateRefs(card: Card): PathRef[] {
+  return [
+    ...extractPathRefs(gateCommands(card), "gates.command"),
+    ...extractPathRefs(targetGateLines(card), "target_gates"),
+  ];
+}
+
+function gateCommandPathRefs(card: Card): PathRef[] {
+  return extractPathRefs(gateCommands(card), "gates.command");
+}
+
+function isSmokePath(path: string): boolean {
+  return path === "test/smoke" || path.startsWith("test/smoke/") || path.includes("/smoke/");
+}
+
+function isContractSeed(card: Card): boolean {
+  const labels = asStringArray(card.labels) ?? [];
+  const seedSlug = String(card.seed_slug ?? "").toLowerCase();
+  const title = String(card.title ?? "").toLowerCase();
+  return labels.includes("contract") || seedSlug.includes("contract") || title.includes("contract");
+}
+
+function mentionsCompileStub(card: Card): boolean {
+  const text = [
+    ...listLines(card, "acceptance"),
+    ...listLines(card, "dispatch_notes"),
+    String(card.title ?? ""),
+  ].join("\n").toLowerCase();
+  return /\b(?:compile|typecheck|minimum|minimal)?\s*stubs?\b|\bstubs?\s*(?:needed|required|for tests to compile)\b/.test(text);
+}
+
+function supportAreaHasProof(card: Card, root: string): boolean {
+  if (gateText(card).includes(root)) return true;
+  if (!root.startsWith("src/") || !isContractSeed(card) || !mentionsCompileStub(card)) return false;
+  return [...listLines(card, "acceptance"), ...listLines(card, "dispatch_notes")].some((line) => line.includes(root));
+}
+
 const args = parseArgs();
 if (args.selfTest) {
   process.exit(runSelfTest());
@@ -326,6 +436,7 @@ for (const card of cards) {
   }
 
   const supportRoots = parseAreaRoots(card.support_area);
+  const scopeRoots = [...areaRoots, ...supportRoots];
   if (card.support_area !== undefined) {
     if (supportRoots.length === 0) {
       errors.push(`${tempId}: empty or invalid support_area`);
@@ -338,10 +449,28 @@ for (const card of cards) {
         errors.push(`${tempId}: support_area duplicates area root ${root}`);
       }
     }
-    const gatesAndTargets = gateText(card);
     for (const root of supportRoots) {
-      if (gatesAndTargets.includes(root)) continue;
+      if (supportAreaHasProof(card, root)) continue;
       errors.push(`${tempId}: support_area ${root} is not referenced by gates or target_gates`);
+    }
+  }
+
+  for (const ref of gateRefs(card)) {
+    if (!pathCoveredByRoots(ref.path, scopeRoots)) {
+      errors.push(`${tempId}: ${ref.source} path ${ref.path} is not covered by area or support_area`);
+    }
+  }
+
+  const commandRefs = gateCommandPathRefs(card);
+  for (const root of areaRoots.filter(isSmokePath)) {
+    if (!commandRefs.some((ref) => gateCoversAreaPath(ref.path, root))) {
+      errors.push(`${tempId}: smoke area ${root} has no gate command covering it`);
+    }
+  }
+
+  if (isContractSeed(card) && mentionsCompileStub(card)) {
+    for (const root of areaRoots.filter((areaRoot) => areaRoot.startsWith("src/"))) {
+      errors.push(`${tempId}: contract compile stub path ${root} must be support_area, not area`);
     }
   }
 
@@ -455,13 +584,138 @@ function runSelfTest(): number {
     "```",
     "",
   ].join("\n");
+  const uncoveredGatePath = [
+    "# Plan",
+    "",
+    "```yaml",
+    "temp_id: N1",
+    "seed_slug: uncovered-gate-fixture",
+    "title: Add uncovered gate fixture",
+    "labels: [net-fixture, impl]",
+    "priority: 1",
+    "blocked_by: []",
+    "parallel_ok: false",
+    "area: src/app",
+    "source_refs:",
+    "  - src/app/main.ts:1",
+    "acceptance:",
+    "  - Behavior is covered.",
+    "gates:",
+    "  - type: unit",
+    "    command: bun test test/unit/app.test.ts",
+    "verification_owner:",
+    "  - N1 owns local proof.",
+    "target_gates:",
+    "  - bun test test/unit/app.test.ts",
+    "estimated_loc: 20-60",
+    "dispatch_notes:",
+    "  - Edit src/app only.",
+    "```",
+    "",
+  ].join("\n");
+  const contractStubArea = [
+    "# Plan",
+    "",
+    "```yaml",
+    "temp_id: N1",
+    "seed_slug: provider-contract-fixtures",
+    "title: Add provider contract fixtures",
+    "labels: [net-fixture, contract, local-test]",
+    "priority: 1",
+    "blocked_by: []",
+    "parallel_ok: false",
+    "area: test/unit/provider.test.ts+src/provider.ts",
+    "source_refs:",
+    "  - spec/provider.md",
+    "acceptance:",
+    "  - Contract tests exist before production implementation.",
+    "gates:",
+    "  - type: unit",
+    "    command: bun test test/unit/provider.test.ts",
+    "verification_owner:",
+    "  - N1 owns contract proof.",
+    "target_gates:",
+    "  - bun test test/unit/provider.test.ts",
+    "estimated_loc: 20-60",
+    "dispatch_notes:",
+    "  - Do not implement `src/provider.ts` beyond the minimum stub needed for tests to compile.",
+    "```",
+    "",
+  ].join("\n");
+  const contractStubSupport = [
+    "# Plan",
+    "",
+    "```yaml",
+    "temp_id: N1",
+    "seed_slug: provider-contract-fixtures",
+    "title: Add provider contract fixtures",
+    "labels: [net-fixture, contract, local-test]",
+    "priority: 1",
+    "blocked_by: []",
+    "parallel_ok: false",
+    "area: test/unit/provider.test.ts",
+    "support_area: src/provider.ts",
+    "source_refs:",
+    "  - spec/provider.md",
+    "acceptance:",
+    "  - Contract tests exist before production implementation.",
+    "gates:",
+    "  - type: unit",
+    "    command: bun test test/unit/provider.test.ts",
+    "verification_owner:",
+    "  - N1 owns contract proof.",
+    "target_gates:",
+    "  - bun test test/unit/provider.test.ts",
+    "estimated_loc: 20-60",
+    "dispatch_notes:",
+    "  - Do not implement `src/provider.ts` beyond the minimum stub needed for tests to compile.",
+    "```",
+    "",
+  ].join("\n");
+  const smokeAreaWithoutGate = [
+    "# Plan",
+    "",
+    "```yaml",
+    "temp_id: N1",
+    "seed_slug: optional-smoke-fixture",
+    "title: Add provider implementation",
+    "labels: [net-fixture, impl, integration]",
+    "priority: 1",
+    "blocked_by: []",
+    "parallel_ok: false",
+    "area: src/provider.ts+test/unit/provider.test.ts+test/smoke/provider.read.test.ts",
+    "source_refs:",
+    "  - spec/provider.md",
+    "acceptance:",
+    "  - Optional smoke path exists for manual use.",
+    "gates:",
+    "  - type: unit",
+    "    command: bun test test/unit/provider.test.ts",
+    "verification_owner:",
+    "  - N1 owns provider proof.",
+    "target_gates:",
+    "  - bun test test/unit/provider.test.ts",
+    "estimated_loc: 20-60",
+    "dispatch_notes:",
+    "  - Provider live smoke is optional/manual.",
+    "```",
+    "",
+  ].join("\n");
   const accepted = validatePlanText("self-test-plan.md", planText, "net-fixture");
   const duplicate = validatePlanText("self-test-plan.md", planText.replace("support_area: test/harness", "support_area: src/app"), "net-fixture");
   const missingGateRef = validatePlanText("self-test-plan.md", planText.replace("support_area: test/harness", "support_area: test/wrapper"), "net-fixture");
+  const uncovered = validatePlanText("self-test-plan.md", uncoveredGatePath, "net-fixture");
+  const contractStub = validatePlanText("self-test-plan.md", contractStubArea, "net-fixture");
+  const contractStubOk = validatePlanText("self-test-plan.md", contractStubSupport, "net-fixture");
+  const smokeNoGate = validatePlanText("self-test-plan.md", smokeAreaWithoutGate, "net-fixture");
   const tests = [
     { name: "accepts support_area", pass: accepted.ok, errors: accepted.errors },
     { name: "rejects support_area duplicate of area", pass: !duplicate.ok && duplicate.errors.some((error) => error.includes("duplicates area")), errors: duplicate.errors },
     { name: "checks support_area gate reference", pass: !missingGateRef.ok && missingGateRef.errors.some((error) => error.includes("not referenced by gates")), errors: missingGateRef.errors },
+    { name: "checks gate path scope", pass: !uncovered.ok && uncovered.errors.some((error) => error.includes("is not covered by area or support_area")), errors: uncovered.errors },
+    { name: "checks contract compile stubs", pass: !contractStub.ok && contractStub.errors.some((error) => error.includes("contract compile stub path")), errors: contractStub.errors },
+    { name: "accepts contract compile stub support_area", pass: contractStubOk.ok, errors: contractStubOk.errors },
+    { name: "checks smoke area gate coverage", pass: !smokeNoGate.ok && smokeNoGate.errors.some((error) => error.includes("smoke area")), errors: smokeNoGate.errors },
   ];
   console.log(JSON.stringify({ ok: tests.every((test) => test.pass), tests }, null, 2));
   return tests.every((test) => test.pass) ? 0 : 1;

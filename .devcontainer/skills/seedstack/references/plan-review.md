@@ -170,6 +170,10 @@ review. These checks are automated, not agent-reviewed:
 - required seed-card fields are present
 - optional `support_area` roots are valid, distinct from `area`, and referenced
   by gate or target-gate proof rather than used as behavior ownership
+- concrete gate and target-gate paths are covered by `area` or `support_area`
+- contract seeds do not hide production compile stubs in `area`; stub paths
+  must be `support_area` and named in acceptance or dispatch notes
+- smoke paths listed in `area` have a matching gate command in that card
 - no cycles or transitively redundant direct edges
 
 Command:

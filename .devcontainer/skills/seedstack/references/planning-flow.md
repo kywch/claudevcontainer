@@ -102,6 +102,11 @@ wrappers; do not assume aliases or wrappers unavailable in their environment.
 - Use `support_area` only when proving the seed requires gate, harness,
   wrapper, or report wiring outside `area`. Keep it distinct from `area` and
   reference it in gates or target gates.
+- Close scope mechanically before creation: every concrete gate or target-gate
+  path must fall under `area` or `support_area`; contract seed compile stubs
+  must use `support_area`, not `area`, with the stub path named in acceptance
+  or dispatch notes; smoke paths in `area` require an explicit gate command in
+  that seed.
 - Each behavior seed owns closest verification; do not defer required checks to
   a later hardening seed.
 - For broad implementation or subsystem work, add an implementation boundary

@@ -35,6 +35,19 @@ optional and distinct: use it only for gate, harness, wrapper, or report wiring
 paths needed to prove the current seed. Do not put product behavior ownership,
 follow-up work, or unrelated cleanup in `support_area`.
 
+Every concrete path named by `gates.command` or `target_gates` must be covered
+by either `area` or `support_area`. If a test, wrapper, smoke file, or report is
+needed only to prove the seed, put that path in `support_area` instead of
+silently widening behavior ownership.
+
+Contract seeds may add failing tests and fixtures. If they need a production
+compile stub, keep the `src/...` stub path out of `area`, list it as
+`support_area`, and name the stub path in acceptance or dispatch notes; the
+contract seed must not own product implementation behavior. Smoke paths listed
+in `area` must have an explicit gate command in the same card. Optional/manual
+smoke drafts without a gate belong in a later smoke seed or outside the current
+seed area.
+
 ## Priority Semantics
 
 `priority` is an urgency class, not an execution-order field. Planned seed
