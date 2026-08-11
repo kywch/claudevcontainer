@@ -2,6 +2,10 @@
 
 Mirror of `CLAUDE.md` for tools that read `AGENTS.md`. Keep both files in sync.
 
+## Default Coding Skill — Ponytail
+
+For every task that creates or modifies code, use the `ponytail` skill before editing. Keep it active through implementation and verification. Skip it for read-only analysis and docs-only changes.
+
 Devcontainer + VPS deployment for AI-assisted development with Claude Code, Codex, Gemini CLI, and Forge, plus Archon as a Telegram/Slack/Discord bot.
 
 ## Architecture
