@@ -79,8 +79,10 @@ For each meaningful changed behavior, restate its invariant and sketch the simpl
 ### Decomposition
 
 - Judge file and component size contextually. Growth is evidence to investigate, not a defect by itself.
-- Measure pre/post size. Crossing a project limit—or roughly 1,000 lines when none exists—requires an explicit search for a stable responsibility seam; length alone is never a finding.
-- Recommend splitting only when a stable responsibility boundary exists.
+- Measure pre/post size. When a changed file crosses a project limit—or 1,000 lines when none exists—perform an explicit decomposition check: identify its responsibilities, a candidate ownership seam, what would move across that seam, and whether the split would reduce conceptual load rather than merely redistribute code.
+- If a stable responsibility seam exists and the split would materially improve cohesion or reduce reasoning cost, report it as a high-confidence **Opportunity** even when no defect or structural regression exists. Cite the pre/post size, the concrete seam, and the architectural payoff; length supplies the trigger, not the evidence or impact.
+- If no such seam exists, do not emit a finding based on length. Record in the review summary that the threshold was checked and why decomposition was waived.
+- Never elevate the finding to **Defect** or **Structural regression** from size alone; those levels require their independent behavioral or ownership evidence.
 - Reject extra modules or helpers that increase navigation without reducing conceptual load.
 
 ### Atomicity, ordering, and concurrency
@@ -140,7 +142,7 @@ Do not:
 - treat passing tests as evidence against a concrete architectural failure mode;
 - present generic cleanup, naming, formatting, documentation, or test-suite observations unless they directly support an architectural finding.
 
-State demonstrated structural costs plainly, without rhetorical severity unsupported by evidence. Limit opportunities to the one or two with the clearest immediate payoff.
+State demonstrated structural costs plainly, without rhetorical severity unsupported by evidence. Limit discretionary opportunities to the one or two with the clearest immediate payoff. A qualifying threshold-crossing decomposition opportunity is mandatory rather than discretionary and should displace a weaker opportunity; if several qualify, report the two highest-payoff seams and disclose the remaining threshold dispositions in the review summary.
 
 ## Severity and output
 
@@ -149,7 +151,7 @@ Use these levels:
 - **Defect**: a concrete reachable failure scenario caused by the architecture, fully traced with high confidence.
 - **Structural regression**: the change demonstrably adds ownership sources, invalid-state ambiguity, invariant duplication, or consumer coupling.
 - **Design risk**: credible but not yet demonstrated failure or maintainability risk.
-- **Opportunity**: a non-blocking simplification with a clear payoff.
+- **Opportunity**: a non-blocking simplification with a clear payoff. A qualifying threshold-crossing decomposition is a strong Opportunity, never automatically a blocker.
 
 Each finding must use:
 
@@ -170,9 +172,10 @@ End with:
 
 - the reviewed diff/base and whether dirty changes were included;
 - any material scope not reviewed;
+- each crossed file-size threshold and its disposition: reported decomposition opportunity or evidence-backed waiver;
 - `No architectural findings` when nothing meets the evidence bar;
 - a non-binding verdict:
-  - `sound`: complete reviewed scope, with no Defects or Structural regressions;
+  - `sound`: complete reviewed scope, with no Defects, Structural regressions, or Design risks; Opportunities may remain;
   - `sound with concerns`: no Defects, but substantiated regressions or risks remain;
   - `changes recommended`: at least one verified Defect or high-confidence regression affects a core invariant;
   - `partial review — disposition limited to reviewed scope`: any material scope was not reviewed.

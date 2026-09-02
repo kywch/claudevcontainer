@@ -1,6 +1,6 @@
 interface:
   display_name: "Architecture Review"
-  short_description: "Find structural regressions and latent bugs"
-  default_prompt: "Use $arch-review to inspect this branch for architectural regressions and architecture-induced latent bugs."
+  short_description: "Find structural regressions, simplifications, and bugs"
+  default_prompt: "Use $arch-review to inspect this branch for architectural regressions, strong structural simplification opportunities, and architecture-induced latent bugs."
 policy:
   allow_implicit_invocation: false
