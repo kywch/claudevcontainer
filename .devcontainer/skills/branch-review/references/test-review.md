@@ -45,8 +45,8 @@ Each rule: (a) one-line rule, (b) pattern to look for, (c) when NOT to apply.
 
 ### 4. Defensive-check tests for unreachable states — delete
 
-(a) Exercises an early `if (!x) return` / `throw` / `raise` guard on input real callers can't produce.
-(b) Guard exists because the function is exported for tests; no production call site passes `undefined` / `None` / zero-value.
+(a) Exercises an early `if (!x) return` / `throw` / `raise` guard for a state made structurally unreachable by a refined representation, controlled constructor, or trusted enforced boundary.
+(b) Current production call sites merely avoiding `undefined` / `None` / zero-value is insufficient when the accepted representation or runtime contract still permits it. Delete only when production construction and access paths enforce the invariant.
 (c) Keep if the guard is a public-API contract (e.g. a function exposed via CLI arg or HTTP handler that real users can hit with bad input). Keep if guarded by a "don't regress" source comment.
 
 ### 5. Parallel one-liners — collapse to a table, **carefully**

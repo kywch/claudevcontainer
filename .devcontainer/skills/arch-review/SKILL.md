@@ -90,7 +90,8 @@ When changed code shows a concrete structural cost or invariant risk, restate th
 
 - Do types and interfaces express the actual invariant?
 - Do optional values, booleans, casts, fallbacks, or loosely shaped data permit invalid combinations?
-- Are validation and normalization performed once at the correct boundary?
+- Does successful validation or normalization construct or return a representation that preserves the learned invariant for consumers, rather than pass the same weak value onward?
+- Is parsing owned at a canonical boundary? It may be staged or context-sensitive, but each effect must receive input refined enough to satisfy its preconditions.
 - Are compatibility and migration semantics explicit where a contract changes?
 
 ### Decomposition
@@ -122,6 +123,7 @@ Actively search for behavioral defects created or exposed by structure:
 - retries or partial failures that duplicate or strand effects;
 - cache, persistence, or in-memory representations with inconsistent lifecycle rules;
 - abstraction leaks that bypass validation, authorization, normalization, or cleanup;
+- boundary checks that discard their proof, leaving downstream rechecks, casts or non-null assertions, "impossible" branches, bypasses, or effects that run before input is sufficiently parsed;
 - ordering assumptions contradicted by asynchronous or event-driven execution;
 - fallback paths that silently violate the primary path's invariant.
 - temporary modes or dual paths without an owner and removal condition that can drift indefinitely.
