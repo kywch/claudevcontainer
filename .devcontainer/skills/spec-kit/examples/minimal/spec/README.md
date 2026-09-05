@@ -5,18 +5,15 @@ Status: draft
 Token Counter specifies how to count whitespace-delimited tokens in a text
 input and return the count.
 
-## Normative Precedence
+## Authority And Reading Chain
 
 1. `spec/glossary.md`
-2. accepted decisions in `spec/decisions.md`
-3. numbered clauses in normative spec files
+2. `spec/behavior.md`
+3. active decisions in `spec/decisions.md`
 4. implementations as evidence only, never as normative source
 
-## Reading Order
-
-1. `spec/glossary.md`
-2. `spec/decisions.md`
-3. `spec/behavior.md`
+This chain defines ownership and reading order; it does not silently resolve
+contradictions. A conflict among normative artifacts is a specification defect.
 
 ## Scope
 

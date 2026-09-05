@@ -1,7 +1,7 @@
 # Behavior
 
-This file is normative. If it conflicts with higher-precedence sources, the
-higher source wins.
+This file is normative. A conflict with another normative artifact is a
+specification defect that must be repaired.
 
 ## B1 Count Tokens
 
@@ -15,4 +15,4 @@ B1.3 Empty input and delimiter-only input return count `0`.
 
 | Decision | Schema | Conformance | Model | Notes |
 | --- | --- | --- | --- | --- |
-| DEC-0001 | n/a | n/a | n/a | Minimal draft example. |
+| D-001 | n/a | n/a | n/a | Minimal draft example. |

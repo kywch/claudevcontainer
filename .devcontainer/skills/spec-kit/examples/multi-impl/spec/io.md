@@ -1,7 +1,7 @@
 # IO
 
-This file is normative. If it conflicts with higher-precedence sources, the
-higher source wins.
+This file is normative. A conflict with another normative artifact is a
+specification defect that must be repaired.
 
 ## I1 Boundary Format
 

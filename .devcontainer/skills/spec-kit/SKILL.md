@@ -34,9 +34,9 @@ Minimal:
 ```text
 spec/
   README.md
-  glossary.md
-  decisions.md
-  behavior.md
+  <glossary>.md
+  <normative-spec>.md
+  <decisions>.md
 ```
 
 Common once behavior is executable or shared:
@@ -78,43 +78,53 @@ spec/
     python.md                 # active/planned Python port only
 ```
 
-Tiny specs may inline glossary and decisions in `README.md`. Larger specs split
-by numbered clause families, not by implementation. Per-language files record
-binding/guidance status for active or planned ports; they are not alternate
-sources of protocol truth. Empty future-port files create drift; do not create
-them.
+Keep `spec/README.md` as the authority root and keep all kit artifacts under
+`spec/`. The authority root may declare project-specific filenames for one
+glossary, one or more normative specification modules, and one decisions file.
+Larger specs split by numbered clause families, not by implementation.
+Per-language files record binding/guidance status for active or planned ports;
+they are not alternate sources of protocol truth. Empty future-port files
+create drift; do not create them.
 
 Distillation should extract implementation-neutral behavior first. Treat current
 code as evidence, not architecture to preserve, unless compatibility requires it.
 
-## Source Precedence
+## Authority And Reading Chain
 
-Use this normative precedence for the normalized kit. If the target repo already
-has its own authority chain, record it as source evidence, then map conflicts
-into this order:
+`spec/README.md` is the required authority root. Its manifest declares the
+project's actual file roles and reading order. Filenames, numbering, and domain
+splits may vary, but the semantic chain is:
 
-1. `spec/glossary.md` for terminology
-2. accepted decisions in `spec/decisions.md`
-3. numbered clauses in normative spec files, excluding explicitly
-   non-normative guide/template/research/workflow files
-4. schemas in `spec/schemas/`
-5. conformance cases in `spec/conformance/cases/`
-6. canonical Quint/state models and `role: canonical` traces in `spec/quint/`
-7. implementations as evidence only
+1. glossary: controls the meanings of defined terms
+2. normative specification: provides the complete current behavioral contract
+   in one or more modules
+3. active decisions: records accepted product choices and consequences that are
+   not obvious from the clauses
+4. schemas in `spec/schemas/`, when present
+5. conformance cases in `spec/conformance/cases/`, when present
+6. canonical state/model artifacts in `spec/quint/`, when present
+7. implementations as evidence only, never as normative source
 
-If sources conflict, follow the higher source and report the mismatch. If two
-normative authorities conflict and no higher source clearly resolves it, stop
-and ask for or create a decision; do not draft around the conflict.
-Non-normative guidance, examples, research notes, and exploratory Quint models
-never fill contract gaps. Use them as reading aids or evidence only.
+This chain defines ownership and reading order; it does not silently resolve
+contradictions. A conflict among the glossary, normative specification, active
+decisions, or another normative artifact is a specification defect. Stop and
+repair it through an explicit product decision and aligned artifact updates.
 
 Schemas are normative for structure, validation, and compatibility constraints
-they explicitly encode. Numbered clauses and accepted decisions govern semantic
-meaning when schema shape alone is ambiguous.
+they explicitly encode. Conformance cases and canonical Quint/state models are
+normative for the behavior they explicitly encode. They must agree with the
+semantic chain. Non-normative guidance, examples, research notes, superseded
+history, and exploratory models never fill contract gaps.
 
-Decisions control behavioral choices until the kit explicitly supersedes them.
-When a decision is incorporated into clauses, keep it aligned or mark it
-superseded by the clause/decision that now governs.
+Active decisions retain normative force but must agree with the glossary and
+current normative specification. Prefer a compact `ID | Decision and
+consequence` table. Use a detailed decision record only when context, evidence,
+or audit needs cannot be represented accurately in one row.
+
+Retain displaced decisions as history rather than deleting or silently
+rewriting them. Put them in an explicitly `NONNORMATIVE` superseded-history
+section with `ID | Superseded by | Former choice | Current consequence`.
+Superseded entries never govern implementation or conformance.
 
 ## Mode Selection
 
@@ -135,8 +145,8 @@ conformance, test, or implementation changes.
 ```text
 intent or implementation evidence
   -> source inventory and authority conflicts
-  -> decisions
-  -> numbered spec
+  -> glossary and numbered normative specification
+  -> active decisions
   -> traceability: clause -> evidence file:line -> tests -> status
   -> schemas where data crosses boundary
   -> CLI/API contract for observable invocation and process behavior
@@ -160,8 +170,11 @@ Classify each slice:
 Product intent unclear -> ask for decision before making normative text.
 Implementation-only bug -> local regression test first; add conformance only
 when other implementations could drift the same observable way.
-Normative behavior change -> decision, spec/schema update, conformance, version
-update, affected implementation updates.
+Accepted product change -> update the governing normative clauses; add the new
+active decision; move each displaced decision into superseded history with an
+explicit replacement and current consequence; update affected version, schemas,
+conformance, models, and implementations. Editorial-only corrections that do
+not alter behavior need no product decision.
 
 ## Spec Maturation Loop
 
@@ -406,8 +419,14 @@ ambiguity cheaply.
   `Predicates`, `Operations`, and `Infrastructure` when they help scanning.
   Reserve a flat `Terms` section for tiny specs only.
 - Number normative clauses with stable IDs.
-- Every decision records context, decision, consequences, conformance impact,
-  model impact, and references.
+- Prefer compact active decisions that state the accepted choice and material
+  consequence. Use a detailed decision record when context, conformance/model
+  impact, affected artifacts, or references cannot be represented accurately
+  in one row.
+- Preserve superseded decisions in an explicitly `NONNORMATIVE` history table
+  that names the replacement, former choice, and current consequence. Check
+  that obsolete choices do not leak into clauses, schemas, conformance, models,
+  implementation guidance, or implementations as current authority.
 - Distill output records clause -> evidence file:line -> conformance/local tests
   -> status inline by default. Create `spec/traceability.md` when the mapping is
   large, multi-source, conflict-heavy, needed for multi-implementation work, or
@@ -480,7 +499,7 @@ Watch for gaps the user did not name:
 Report:
 
 - files changed
-- source precedence chosen
+- authority and reading chain declared
 - self-sufficiency: pass/fail with blockers
 - maturation loop status and remaining pass needed before handoff
 - sandbox path used, or no implementation sandbox used

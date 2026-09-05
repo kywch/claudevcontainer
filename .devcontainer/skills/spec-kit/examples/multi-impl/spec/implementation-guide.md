@@ -1,13 +1,14 @@
 # Implementation Guide
 
-Non-normative guidance. If this conflicts with `spec/README.md` source
-precedence, the higher source wins.
+Non-normative guidance. It never overrides the authority and reading chain in
+`spec/README.md`.
 
-## Source Precedence
+## Authority And Reading Chain
 
-Follow `spec/README.md` source precedence. If implementation behavior,
-conformance, schemas, clauses, decisions, or glossary conflict, follow the
-higher source and report the mismatch.
+Follow the roles and order declared by `spec/README.md`. If implementation
+behavior conflicts with a normative artifact, follow the normative artifact.
+If normative artifacts conflict with each other, report and repair the
+specification defect.
 
 ## Testing
 
@@ -40,7 +41,7 @@ Do not include it when:
 ## Review Checklist
 
 - Unknown fields survive mutation per `spec/behavior.md#b1-flag-record` and
-  `DEC-0001`.
+  `D-001`.
 - If stable errors are added to normative IO clauses later, tests assert the
   public error contract without depending on runtime exception text.
 - Port guide commands match package tooling.

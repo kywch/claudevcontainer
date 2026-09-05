@@ -5,26 +5,19 @@ Status: draft
 Flag Store specifies a small JSON flag record, observable read/write behavior,
 and implementation guidance for TypeScript, Rust, Go, and Python ports.
 
-## Normative Precedence
+## Authority And Reading Chain
 
 1. `spec/glossary.md`
-2. accepted decisions in `spec/decisions.md`
-3. numbered clauses in normative spec files
+2. normative specification in `spec/behavior.md` and `spec/io.md`
+3. active decisions in `spec/decisions.md`
 4. schemas in `spec/schemas/`, when present
 5. conformance cases in `spec/conformance/cases/`, when present
 6. canonical state/model artifacts in `spec/quint/`, when present
 7. implementations as evidence only, never as normative source
 
+This chain defines ownership and reading order; it does not silently resolve
+contradictions. A conflict among normative artifacts is a specification defect.
 Non-normative guidance and example models never fill contract gaps.
-
-## Reading Order
-
-1. `spec/glossary.md`
-2. `spec/decisions.md`
-3. `spec/behavior.md`
-4. `spec/io.md`
-5. `spec/quint/README.md`
-6. `spec/implementation-guide.md`
 
 ## Scope
 

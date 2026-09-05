@@ -6,7 +6,7 @@ use; do not copy their domain details into target specs.
 
 ## spec/README.md
 
-Keep optional sources out of precedence until they exist.
+Keep optional sources out of the declared chain until they exist.
 
 ```markdown
 # <Spec Name> <Version>
@@ -15,29 +15,35 @@ Status: draft
 
 <One paragraph: what this spec defines.>
 
-## Normative Precedence
+## Authority And Reading Chain
 
-1. `spec/glossary.md`
-2. accepted decisions in `spec/decisions.md`
-3. numbered clauses in normative spec files, excluding explicitly
-   non-normative guide/template/research/workflow files
-4. schemas in `spec/schemas/`, when present
-5. conformance cases in `spec/conformance/cases/`, when present
-6. canonical state/model artifacts in `spec/quint/`, when present
-7. implementations as evidence only, never as normative source
+The manifest below declares semantic roles and required reading order. Project
+filenames and the number of normative modules may vary, but the chain does not.
 
-Non-normative guidance, examples, research notes, and exploratory models never
-fill contract gaps.
+1. Glossary: `spec/<glossary>.md`
+2. Normative specification:
+   - `spec/<normative-module-1>.md`
+   - `spec/<normative-module-2>.md`
+3. Active decisions: `spec/<decisions>.md`
+4. Schemas in `spec/schemas/`, when present
+5. Conformance cases in `spec/conformance/cases/`, when present
+6. Canonical state/model artifacts in `spec/quint/`, when present
+7. Implementations as evidence only, never as normative source
 
-Accepted decisions remain normative until explicitly superseded. When a decision
-is incorporated into clauses, keep the decision consistent or mark it superseded.
+The glossary controls defined terms. The normative modules together provide the
+complete current behavioral contract. Active decisions record accepted product
+choices and consequences not obvious from the clauses and must agree with the
+glossary and normative specification.
 
-## Reading Order
+This chain defines ownership and reading order; it does not silently resolve
+contradictions. Any conflict among normative artifacts is a specification defect
+that must be repaired.
 
-1. `spec/glossary.md`
-2. `spec/decision-index.md`, when present
-3. `spec/decisions.md`
-4. <numbered clause files>
+Schemas, conformance cases, and canonical state/model artifacts are normative
+for behavior they explicitly encode and must agree with this chain.
+Implementations are evidence only. Non-normative guidance, examples, research
+notes, superseded decision history, and exploratory models never fill contract
+gaps.
 
 ## Scope
 
@@ -54,19 +60,19 @@ is incorporated into clauses, keep the decision consistent or mark it superseded
 ```
 ```
 
-## Decision Index Row
+## Optional Decision Index Row
 
 ```markdown
-| [DEC-0001](decisions.md#dec-0001-short-name) | YYYY-MM-DD | <spec-version> | <area> | <compat> | <summary>. |
+| [D-001](<decisions>.md#d-001) | YYYY-MM-DD | <spec-version> | <area> | <compat> | <summary>. |
 ```
 
-## spec/glossary.md
+## Glossary file
 
 ```markdown
 # Glossary
 
-This file is normative. If a term's usage elsewhere conflicts with this
-glossary, this glossary wins and the other source should be updated.
+This file controls the meanings of defined terms. Any conflict with another
+normative artifact is a specification defect that must be repaired.
 
 Prefer domain-grouped sections like `## Primitives`, `## Predicates`,
 `## Operations`, and `## Infrastructure` when the spec has enough surface area.
@@ -74,7 +80,7 @@ Use `## Terms` only for very small specs.
 
 ## Primitives
 
-- **Term**: Definition. Source: `spec/behavior.md#b1`.
+- **Term**: Definition. Source: `spec/<normative-module>.md#b1`.
 
 ## Terminology Normalization
 
@@ -83,75 +89,46 @@ Use `## Terms` only for very small specs.
 | Field/API/name | `canonicalName` | `oldName`, `ambiguousName` |
 ```
 
-## spec/decisions.md
+## Decisions file
 
 ```markdown
 # Decisions
 
-This file is the accepted decision log. Decisions are normative until explicitly
-superseded. When numbered clauses incorporate a decision, keep this log
-consistent or mark the old decision superseded.
+This file records accepted product choices and their material consequences.
+Active decisions are normative but must agree with the glossary and the complete
+current contract in the normative specification.
 
-## Decision Template
+## Active decisions
 
-Copy this entry for each accepted decision.
+| ID | Decision and consequence |
+| --- | --- |
+| D-001 | <Accepted choice and material consequence.> |
 
-## DEC-0001 <Short Name>
+## Superseded history
 
-Status: accepted
-Date: YYYY-MM-DD
-Spec: <spec-version>
-Area: <logic|state|storage|io|schema|conformance|versioning|implementation>
-Compatibility: <copy|correct|defer|new|breaking>
-Supersedes: <DEC-ID or none>
-Superseded-By: <DEC-ID/clause or none>
+This section is **NONNORMATIVE** and never an implementation or conformance
+source.
 
-### Context
+| ID | Superseded by | Former choice | Current consequence |
+| --- | --- | --- | --- |
+| D-000 | D-001 | <Former choice.> | Do not implement; follow D-001. |
 
-<Why decision exists.>
-
-### Decision
-
-<Chosen behavior.>
-
-### Consequences
-
-<Tradeoffs.>
-
-### Conformance
-
-<Cases to add/update. If none, give reason: non-observable, covered by existing
-case, or decision-only.>
-
-### Verification Impact
-
-<Schema, conformance, model, or implementation checks to add/update. Omit
-artifact types that do not apply.>
-
-### Affected Artifacts
-
-- clauses: <files or none>
-- schemas: <files or none>
-- conformance: <cases or none>
-- models: <files or none>
-- implementations: <ports or none>
-
-### References
-
-- <evidence>
+Use project-appropriate decision IDs. Use a detailed decision record with
+context, consequences, verification impact, affected artifacts, and references
+only when the compact row cannot preserve required evidence or audit detail.
 ```
 
-## spec/decision-index.md
+## Optional decision index
 
 ```markdown
 # Decision Index
 
-Routing table for `spec/decisions.md`. The full decision log remains
+Routing table for `spec/<decisions>.md`. The full decision log remains
 normative.
 
-| DEC | Date | Spec | Area | Compat | Summary |
+| Decision | Date | Spec | Area | Compat | Summary |
 | --- | --- | --- | --- | --- | --- |
-| [DEC-0001](decisions.md#dec-0001-short-name) | YYYY-MM-DD | <version> | <area> | <compat> | <summary>. |
+| [D-001](<decisions>.md#d-001) | YYYY-MM-DD | <version> | <area> | <compat> | <summary>. |
 
 ## Pending Decisions
 
@@ -183,8 +160,8 @@ L1.3 <Error/no-op/storage effect if relevant.>
 ```markdown
 # Behavior
 
-This file is normative. If it conflicts with higher-precedence sources, the
-higher source wins.
+This file is normative. A conflict with another normative artifact is a
+specification defect that must be repaired.
 
 ## B1 <Core Behavior>
 
@@ -204,8 +181,8 @@ B2.1 <Normative rule.>
 ```markdown
 # Errors
 
-This file is normative. If it conflicts with higher-precedence sources, the
-higher source wins.
+This file is normative. A conflict with another normative artifact is a
+specification defect that must be repaired.
 
 Stable error shape and codes.
 
@@ -225,8 +202,8 @@ E1.1 <Envelope/API/exception shape.>
 ```markdown
 # Versioning
 
-This file is normative. If it conflicts with higher-precedence sources, the
-higher source wins.
+This file is normative. A conflict with another normative artifact is a
+specification defect that must be repaired.
 
 ## V1 Version Identifier
 
@@ -247,8 +224,8 @@ V3.1 <Migration/upgrade policy, or explicit non-goal.>
 ```markdown
 # State
 
-This file is normative. If it conflicts with higher-precedence sources, the
-higher source wins.
+This file is normative. A conflict with another normative artifact is a
+specification defect that must be repaired.
 
 ## S1 States
 
@@ -271,8 +248,8 @@ S3.1 <Invariant that must hold after every operation.>
 ```markdown
 # Storage
 
-This file is normative. If it conflicts with higher-precedence sources, the
-higher source wins.
+This file is normative. A conflict with another normative artifact is a
+specification defect that must be repaired.
 
 ## ST1 Layout
 
@@ -296,8 +273,8 @@ ST4.1 <Path/symlink/network/secret constraints.>
 ```markdown
 # IO
 
-This file is normative. If it conflicts with higher-precedence sources, the
-higher source wins.
+This file is normative. A conflict with another normative artifact is a
+specification defect that must be repaired.
 
 ## I1 Surface
 
@@ -343,15 +320,15 @@ IM3.1 <Implementation-neutral portability requirement.>
 ```markdown
 # Implementation Guide
 
-Non-normative guidance. If this conflicts with `spec/README.md` source
-precedence, the higher source wins.
+Non-normative guidance. It never overrides the authority and reading chain in
+`spec/README.md`.
 
-## Source Precedence
+## Authority And Reading Chain
 
-Follow `spec/README.md` source precedence. If implementation behavior,
-conformance, schemas, clauses, decisions, or glossary conflict, follow the
-higher source and report the mismatch. Do not change normative behavior to fit
-one implementation.
+Follow the roles and order declared by `spec/README.md`. If implementation
+behavior, conformance, schemas, clauses, decisions, or glossary conflict, report
+and repair the specification defect. Do not change normative behavior to fit one
+implementation.
 
 ## Slice Triage
 
@@ -474,7 +451,10 @@ Non-normative process guidance for changing this spec kit.
 
 1. Identify governing source.
 2. Classify as `copy`, `correct`, `defer`, or `new`.
-3. Update decisions/clauses/schemas/conformance/model/implementation as needed.
+3. For an accepted product change, update governing clauses, add the active
+   decision, move displaced choices to NONNORMATIVE superseded history, and
+   update affected version/schemas/conformance/models/implementations. Editorial
+   corrections need no product decision.
 4. Run targeted gates.
 5. Review and verify.
 
@@ -577,7 +557,7 @@ Adjust schema to target runner. Keep each case focused on one failure mode.
   "$id": "https://example.invalid/schemas/<name>.v1.schema.json",
   "title": "<Name>",
   "type": "object",
-  "description": "Boundary data shape. Source: spec/<file>.md#<clause> and/or DEC-0001.",
+  "description": "Boundary data shape. Source: spec/<file>.md#<clause> and/or <decision-ID>.",
   "required": ["<field>"],
   "properties": {
     "<field>": {

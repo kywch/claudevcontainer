@@ -84,8 +84,9 @@ Use extra ports to detect:
 - schema defaults and unknown-field handling
 - timestamp/ID generation assumptions
 
-When ports disagree, source precedence decides. If source is silent, create a
-decision.
+When ports disagree, check the authority chain. A contradiction among normative
+artifacts is a specification defect; repair the affected artifacts. If the
+normative specification is silent, create an active decision and update it.
 
 ## Freeze Gate
 
