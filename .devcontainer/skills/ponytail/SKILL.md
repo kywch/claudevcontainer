@@ -38,9 +38,9 @@ Do not economize on understanding, trust-boundary validation, data-loss preventi
 
 ## Test in proportion to risk
 
-For non-trivial logic, reuse sufficient coverage or add the smallest meaningful check. Test behavior, not implementation details. Trivial, low-risk changes need no new tests.
+Do not write tests for reversible, low-impact changes that mirror the implementation. If you do choose to verify your work with tests, make sure that the tests are meaningful and necessary to verify implementation.
 
-Run relevant tests and required repository checks. Broaden or repeat testing only when changes, failures, or unresolved risks justify it. Never reduce rigor for security or data integrity.
+Run tests appropriate to the change and complete required checks. Once those pass, broaden or repeat testing only when new changes, failures, or unresolved concerns justify it; otherwise, continue toward completing the task.
 
 ## Attribution
 
