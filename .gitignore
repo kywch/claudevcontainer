@@ -35,3 +35,6 @@
 /.archon/*
 !/.archon/workflows/
 !/.archon/workflows/**
+
+# Python bytecode caches
+__pycache__/
