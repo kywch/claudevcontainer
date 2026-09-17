@@ -10,9 +10,9 @@
   "runArgs": [
     "--init",
     "--network=host",
-    "--gpus=all",
+    "--device=nvidia.com/gpu=all",
     "--device=/dev/dri",
-    "--env=NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility"
+    "--env=NVIDIA_DRIVER_CAPABILITIES=all"
   ],
   // forwardPorts is incompatible with --network=host (ports are already
   // accessible on the host). Kept commented for reference.
@@ -60,7 +60,8 @@
     "ARCHON_HOME": "/workspace/.archon",
     "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
     "NVIDIA_VISIBLE_DEVICES": "all",
-    "NVIDIA_DRIVER_CAPABILITIES": "graphics,compute,utility"
+    "NVIDIA_DRIVER_CAPABILITIES": "all",
+    "DISPLAY": "${localEnv:DISPLAY}"
   },
   "postAttachCommand": "bash .devcontainer/install-openai-chatgpt-vsix.sh",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",

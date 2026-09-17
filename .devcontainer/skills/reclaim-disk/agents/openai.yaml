@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reclaim Disk"
+  short_description: "Audit disk; remove approved old worktrees or Docker data"
+  default_prompt: "Use $reclaim-disk to scan workspace and Docker disk usage. List every candidate, then require report-bound explicit approval before removing 14+-day secondary worktrees, 14+-day unreferenced images, or anonymous local volumes."

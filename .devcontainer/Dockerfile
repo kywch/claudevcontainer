@@ -13,6 +13,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && locale-gen && \
   apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# CUDA compiler matching the project's PyTorch cu128 build. Install only the
+# versioned NVCC toolchain package; the host driver is injected at runtime.
+ARG CUDA_KEYRING_VERSION=1.1-1
+RUN curl -fsSL \
+      "https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_${CUDA_KEYRING_VERSION}_all.deb" \
+      -o /tmp/cuda-keyring.deb && \
+  dpkg -i /tmp/cuda-keyring.deb && \
+  rm /tmp/cuda-keyring.deb && \
+  apt-get update && \
+  apt-get install -y --no-install-recommends cuda-nvcc-12-8 && \
+  apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV CUDA_HOME=/usr/local/cuda-12.8
+ENV PATH="${CUDA_HOME}/bin:${PATH}"
+
 # Rename the pre-existing node user to agent (UID 1000 preserved)
 ARG USERNAME=agent
 RUN usermod -l $USERNAME -d /home/$USERNAME -m node && \
