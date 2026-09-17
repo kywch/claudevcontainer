@@ -36,7 +36,11 @@ Treat bug reports as symptoms. Find every caller of the changed function, identi
 
 Do not economize on understanding, trust-boundary validation, data-loss prevention, security, accessibility, hardware calibration, or explicit user requirements.
 
-Leave one runnable check for non-trivial logic: the smallest test, assertion, or self-check that fails when behavior breaks. Do not add a framework or fixture suite solely for that check. Trivial one-line changes need no new test.
+## Test in proportion to risk
+
+For non-trivial logic, reuse sufficient coverage or add the smallest meaningful check. Test behavior, not implementation details. Trivial, low-risk changes need no new tests.
+
+Run relevant tests and required repository checks. Broaden or repeat testing only when changes, failures, or unresolved risks justify it. Never reduce rigor for security or data integrity.
 
 ## Attribution
 
