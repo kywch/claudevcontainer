@@ -39,9 +39,11 @@ Use subagents by default when a task has useful, separable work. Delegate to pre
 
 For every delegation, use judgment to select the least expensive available model capable of completing the subtask reliably:
 
-- Use smaller, faster models for clear, bounded work such as file discovery, extraction, straightforward edits, and routine checks.
+- Use the lowest-cost model only for mechanical, independently verifiable work such as file discovery, extraction, command execution, and test-log collection.
 - Use stronger models for ambiguity, complex debugging, architectural decisions, or work where mistakes are difficult to detect.
 - Escalate to a stronger model if the initial result is insufficient.
+
+Do not use the lowest-cost model for review, verification, critique, debugging, architecture, test-coverage decisions, security analysis, or other judgment-heavy work. Use a balanced model or stronger for these tasks, escalating for complex or high-impact decisions.
 
 Do not automatically give every subagent the main agent's model. When model selection is supported, choose it explicitly, respecting any model the user specified. If delegation or model selection is unavailable, continue with the available capabilities and state the limitation briefly.
 
