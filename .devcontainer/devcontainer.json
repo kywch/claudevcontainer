@@ -38,7 +38,7 @@
   // wrapper; we need devcontainer-entrypoint to run for volume chown, config
   // seeding, and first-boot auth import.
   "overrideCommand": false,
-  "initializeCommand": "mkdir -p ${localEnv:HOME}/.claude ${localEnv:HOME}/.codex ${localEnv:HOME}/.gemini ${localEnv:HOME}/.forge ${localEnv:HOME}/.ssh ${localEnv:HOME}/.config/Code/CachedExtensionVSIXs ${localEnv:HOME}/.config/VSCodium/CachedExtensionVSIXs",
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/.claude ${localEnv:HOME}/.codex ${localEnv:HOME}/.gemini ${localEnv:HOME}/.forge ${localEnv:HOME}/.cursor ${localEnv:HOME}/.config/cursor ${localEnv:HOME}/.ssh ${localEnv:HOME}/.config/Code/CachedExtensionVSIXs ${localEnv:HOME}/.config/VSCodium/CachedExtensionVSIXs",
   "mounts": [
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
 
@@ -48,6 +48,11 @@
     "source=codex-home-${devcontainerId},target=/home/agent/.codex,type=volume",
     "source=gemini-home-${devcontainerId},target=/home/agent/.gemini,type=volume",
     "source=forge-home-${devcontainerId},target=/home/agent/.forge,type=volume",
+    // Cursor splits state across two home-relative dirs (unlike the other
+    // tools' single ~/.tool): sessions/skills/worktrees in ~/.cursor, and
+    // config/auth in ~/.config/cursor.
+    "source=cursor-home-${devcontainerId},target=/home/agent/.cursor,type=volume",
+    "source=cursor-config-${devcontainerId},target=/home/agent/.config/cursor,type=volume",
     // gh token volume: no host bind, no entrypoint import. Run `gh auth login`
     // once inside the container; the token persists across rebuilds in this volume.
     "source=gh-config-${devcontainerId},target=/home/agent/.config/gh,type=volume",
@@ -58,6 +63,9 @@
     "source=${localEnv:HOME}/.codex,target=/mnt/host-codex,type=bind,readonly",
     "source=${localEnv:HOME}/.gemini,target=/mnt/host-gemini,type=bind,readonly",
     "source=${localEnv:HOME}/.forge,target=/mnt/host-forge,type=bind,readonly",
+    // Cursor's auth.json lives under ~/.config/cursor on the host (not
+    // ~/.cursor) — see getAuthFilePath()'s Linux default in cursor-agent.
+    "source=${localEnv:HOME}/.config/cursor,target=/mnt/host-cursor,type=bind,readonly",
     "source=${localEnv:HOME}/.ssh,target=/mnt/host-ssh,type=bind,readonly",
     // Read-only extension sources so postAttach can pin/repair the remote
     // OpenAI ChatGPT extension from a host-side VSIX when available.

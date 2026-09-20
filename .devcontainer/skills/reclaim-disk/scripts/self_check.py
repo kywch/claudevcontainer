@@ -62,6 +62,8 @@ def main() -> None:
     else:
         raise AssertionError("unsupported apply target accepted")
     assert SENSITIVE_VOLUME.search("codex-home-example")
+    assert SENSITIVE_VOLUME.search("cursor-home-example")
+    assert SENSITIVE_VOLUME.search("cursor-config-example")
     assert SENSITIVE_VOLUME.search("vscode")
     records = worktree_records(
         "worktree /workspace/repo\nHEAD abc\nbranch refs/heads/main\n\n"

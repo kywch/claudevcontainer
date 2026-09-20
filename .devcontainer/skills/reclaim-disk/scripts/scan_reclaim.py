@@ -23,7 +23,7 @@ BENCHFLOW_EPHEMERAL = "io.benchflow.ephemeral"
 DOCKER_ANONYMOUS = "com.docker.volume.anonymous"
 ANONYMOUS_VOLUME_NAME = re.compile(r"[0-9a-f]{64}")
 SENSITIVE_VOLUME = re.compile(
-    r"(?:^vscode$|^(?:codex|claude|forge|gemini)-home-|^gh-config-|history|credential|config|state)",
+    r"(?:^vscode$|^(?:codex|claude|forge|gemini|cursor)-home-|^gh-config-|history|credential|config|state)",
     re.IGNORECASE,
 )
 

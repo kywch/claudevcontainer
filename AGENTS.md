@@ -6,7 +6,7 @@ Mirror of `CLAUDE.md` for tools that read `AGENTS.md`. Keep both files in sync.
 
 For every task that creates or modifies code, use the `ponytail` skill before editing. Keep it active through implementation and verification. Skip it for read-only analysis and docs-only changes.
 
-Devcontainer + VPS deployment for AI-assisted development with Claude Code, Codex, Gemini CLI, and Forge, plus Archon as a Telegram/Slack/Discord bot.
+Devcontainer + VPS deployment for AI-assisted development with Claude Code, Codex, Gemini CLI, Forge, and Cursor CLI, plus Archon as a Telegram/Slack/Discord bot.
 
 ## Architecture
 
@@ -34,8 +34,8 @@ docker-compose.vps.yml
 
 | File | Purpose |
 |---|---|
-| `.devcontainer/Dockerfile` | Devcontainer image: bun, node 20, Claude/Codex/Gemini/Forge CLIs, Claude rtk hook, Archon CLI |
-| `.devcontainer/entrypoint.sh` | First-boot: volume chown, config seeding, host auth import, transcript relocation/backup, Docker config isolation from DevPod, Docker GID alignment |
+| `.devcontainer/Dockerfile` | Devcontainer image: bun, node 20, Claude/Codex/Gemini/Forge CLIs, Cursor CLI (`cursor-agent`), Archon CLI |
+| `.devcontainer/entrypoint.sh` | First-boot: volume chown (including Cursor's split `~/.cursor` + `~/.config/cursor`), config seeding, host auth import, transcript relocation/backup, Docker config isolation from DevPod, Docker GID alignment |
 | `.devcontainer/devcontainer.json` | Shared VS Code/VSCodium config: volume mounts, host auth bind mounts, and the Codium-safe extension set |
 | `.devcontainer/devcontainer.gpu.json` | Shared GPU-enabled variant for hosts with NVIDIA passthrough configured |
 | `.devcontainer/install-openai-chatgpt-vsix.sh` | Post-attach helper that verifies/pins the remote `openai.chatgpt` extension version and can repair it from a cached host-side VSIX |
@@ -48,8 +48,8 @@ docker-compose.vps.yml
 
 Runs on every container start, idempotent:
 
-1. **Volume ownership** — `chown agent:agent` on tool home dirs (Docker creates volumes as root).
-2. **Transcript relocation/backup** — symlinks Claude `projects/`, `todos/`, `shell-snapshots/` and Gemini `tmp/` to `/workspace/.agent-state/` so transcripts are visible on the host bind mount. Codex `sessions/` stays live in the `codex-home` volume because Codex guards against symlinked state roots, but it is copied to `/workspace/.agent-state/codex/sessions/` on every start and then mirrored every five minutes along with `session_index.jsonl`.
+1. **Volume ownership** — `chown agent:agent` on tool home dirs (Docker creates volumes as root). Cursor splits state across two home-relative dirs — `~/.cursor` (sessions/skills/worktrees) and `~/.config/cursor` (config/auth) — so it gets a standalone chown line for `~/.config/cursor` in addition to the per-tool loop that covers `~/.cursor`.
+2. **Transcript relocation/backup** — symlinks Claude `projects/`, `todos/`, `shell-snapshots/`, Gemini `tmp/`, and Cursor `projects/` to `/workspace/.agent-state/` so transcripts are visible on the host bind mount. Codex `sessions/` stays live in the `codex-home` volume because Codex guards against symlinked state roots, but it is copied to `/workspace/.agent-state/codex/sessions/` on every start and then mirrored every five minutes along with `session_index.jsonl`.
 3. **Archon symlinks** — bridges `/workspace/.archon/.archon/workflows` for global workflow discovery and `workspaces` → `~/.archon-worktrees` for worktree I/O.
 4. **Config seeding** — copies baked-in defaults from `/opt/devcontainer-home/` into tool home volumes. Top-level files overwrite every boot; managed subdirs (`commands`, `agents`, `skills`, `hooks`) mirror with `--delete`.
 5. **Host auth import** — on first boot (and refreshes when the host copy is newer) copies `.credentials.json` / `auth.json` / `oauth_creds.json` / `.mcp-credentials.json` from read-only host bind mounts (`/mnt/host-*`) into volumes. If already authenticated on the host, no re-auth needed.

@@ -37,10 +37,10 @@ RUN usermod -l $USERNAME -d /home/$USERNAME -m node && \
 # per-tool home dirs (named volumes overlay these at runtime), and
 # passwordless sudo for agent (entrypoint uses it for first-boot chown).
 RUN mkdir -p /usr/local/share/npm-global /commandhistory /workspace \
-             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini /home/$USERNAME/.forge /home/$USERNAME/.ssh && \
+             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini /home/$USERNAME/.forge /home/$USERNAME/.cursor /home/$USERNAME/.config/cursor /home/$USERNAME/.ssh && \
   touch /commandhistory/.bash_history && \
   chown -R $USERNAME:$USERNAME /usr/local/share/npm-global /commandhistory /workspace \
-             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini /home/$USERNAME/.forge /home/$USERNAME/.ssh && \
+             /home/$USERNAME/.claude /home/$USERNAME/.codex /home/$USERNAME/.gemini /home/$USERNAME/.forge /home/$USERNAME/.cursor /home/$USERNAME/.config/cursor /home/$USERNAME/.ssh && \
   echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME-all && \
   chmod 0440 /etc/sudoers.d/$USERNAME-all
 
@@ -71,13 +71,6 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 # Install bun (system-wide binary; globals still land in $HOME/.bun)
 COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx
-
-# rtk (Rust Token Killer) — PreToolUse hook, 60-90% token savings on Bash
-# output. Pinned for reproducible rebuilds.
-ARG RTK_VERSION=v0.37.2
-RUN curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/rtk-x86_64-unknown-linux-musl.tar.gz" \
-    | tar -xz -C /usr/local/bin rtk && \
-  chmod 0755 /usr/local/bin/rtk
 
 # Archon CLI. State at $ARCHON_HOME=/workspace/.archon (set in
 # devcontainer.json). Pinned + checksum-verified. Final `rm -rf
@@ -116,8 +109,6 @@ ENV VISUAL=nano
 # Redirect Docker config away from ~/.docker so DevPod's credential
 # injection into ~/.docker/config.json is harmless.
 ENV DOCKER_CONFIG=/home/agent/.docker-clean
-# Opt out of rtk telemetry (anonymous but on-by-default upstream)
-ENV RTK_TELEMETRY_DISABLED=1
 
 # Install zsh with plugins
 ARG ZSH_IN_DOCKER_VERSION=1.2.1
@@ -140,6 +131,15 @@ RUN bun install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli &&
   ln -sf ../install/global/node_modules/@anthropic-ai/claude-code/bin/claude.exe \
     /home/agent/.bun/bin/claude
 
+# Cursor CLI (cursor-agent). Floats to latest — rebuild to update, matching
+# Claude/Codex/Gemini/Forge. No checksums published upstream for the
+# installer's tarball (TLS-only integrity, same limitation whether pinned or
+# not). Installs into ~/.local/{share,bin}/cursor-agent under the agent
+# user's own home (installer's native layout) — PATH already covers
+# ~/.local/bin (see ENV PATH above).
+RUN curl https://cursor.com/install -fsS | bash && \
+    cursor-agent --version
+
 # Quint (TLA+-style executable spec language). Used by the quint-loop skill.
 # Seeds (https://github.com/jayminwest/seeds), git-native issue tracker for
 # agent workflows. Provides the `sd` CLI.
@@ -149,18 +149,8 @@ RUN bun install -g @informalsystems/quint @os-eco/seeds-cli
 # every container start. After bun install so edits are cheap to iterate.
 COPY --chown=$USERNAME:$USERNAME home/ /opt/devcontainer-home/
 
-# Bake rtk's Claude hook. Seed settings.json from baked defaults so rtk
-# merges its hook into our permissions block, then copy the patched file
-# back for the entrypoint's rsync. rtk >=0.37 uses an inline binary hook
-# (`rtk hook claude`) — no script to copy.
-RUN cp /opt/devcontainer-home/.claude/settings.json /home/agent/.claude/settings.json && \
-  rtk init -g --auto-patch && \
-  cp /home/agent/.claude/settings.json /opt/devcontainer-home/.claude/settings.json
-
-# Codex prompt-level guidance (caveman style only) is authored
-# directly in .devcontainer/home/.codex/AGENTS.md and placed by the COPY
-# above. `rtk init -g --codex` is intentionally NOT run — it would
-# overwrite AGENTS.md with a minimal @RTK.md stub.
+# Codex prompt-level guidance (caveman style only) is authored directly in
+# .devcontainer/home/.codex/AGENTS.md and placed by the COPY above.
 
 # Entrypoint: first-boot volume ownership, config seeding, auth import.
 # Last so entrypoint.sh edits only invalidate this layer.

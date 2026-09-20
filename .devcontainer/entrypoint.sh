@@ -12,13 +12,16 @@ set -e
 DEFAULTS_ROOT=/opt/devcontainer-home
 AGENT_HOME=/home/agent
 AGENT_STATE=/workspace/.agent-state
-TOOLS=(claude codex gemini forge)
+TOOLS=(claude codex gemini forge cursor)
 
 # 1. Fix volume ownership on first boot (Docker creates volumes as root:root).
 for tool in "${TOOLS[@]}"; do
   sudo chown -R agent:agent "$AGENT_HOME/.$tool" 2>/dev/null || true
 done
 sudo chown -R agent:agent "$AGENT_HOME/.config/gh" 2>/dev/null || true
+# Cursor's config/auth live under ~/.config/cursor, separate from ~/.cursor
+# (which the TOOLS loop above already covers) — needs its own chown.
+sudo chown -R agent:agent "$AGENT_HOME/.config/cursor" 2>/dev/null || true
 sudo chown -R agent:agent "$AGENT_HOME/.ssh" 2>/dev/null || true
 # Remote editor servers sometimes self-bootstrap as root on first connect,
 # leaving agent unreadable extension indexes behind and crashing the remote EH.
@@ -45,6 +48,7 @@ for sub in projects todos shell-snapshots; do
   relocate_symlink "$AGENT_HOME/.claude/$sub" "$AGENT_STATE/claude/$sub"
 done
 relocate_symlink "$AGENT_HOME/.gemini/tmp" "$AGENT_STATE/gemini/tmp"
+relocate_symlink "$AGENT_HOME/.cursor/projects" "$AGENT_STATE/cursor/projects"
 
 # Codex session transcripts are safe to copy, but not safe to relocate with
 # symlinks. Mirror them into the workspace so rebuilds/recreates do not strand
@@ -141,6 +145,7 @@ import_auth /mnt/host-codex/auth.json           "$AGENT_HOME/.codex/auth.json"
 import_auth /mnt/host-gemini/oauth_creds.json   "$AGENT_HOME/.gemini/oauth_creds.json"
 import_auth /mnt/host-forge/.credentials.json     "$AGENT_HOME/.forge/.credentials.json"
 import_auth /mnt/host-forge/.mcp-credentials.json "$AGENT_HOME/.forge/.mcp-credentials.json"
+import_auth /mnt/host-cursor/auth.json           "$AGENT_HOME/.config/cursor/auth.json"
 
 import_ssh_dir() {
   local src="$1" dst="$2"

@@ -5,7 +5,7 @@ set -euo pipefail
 
 AGENT_HOME="${AGENT_HOME:-/home/agent}"
 SHARED_SKILLS="${SHARED_SKILLS:-/workspace/.devcontainer/skills}"
-TOOLS="${TOOLS:-claude codex gemini forge}"
+TOOLS="${TOOLS:-claude codex gemini forge cursor}"
 
 if [ ! -d "$SHARED_SKILLS" ]; then
   echo "skills source missing: $SHARED_SKILLS" >&2
