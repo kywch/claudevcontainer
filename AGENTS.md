@@ -36,8 +36,8 @@ docker-compose.vps.yml
 |---|---|
 | `.devcontainer/Dockerfile` | Devcontainer image: bun, node 20, Claude/Codex/Gemini/Forge CLIs, Cursor CLI (`cursor-agent`), Archon CLI |
 | `.devcontainer/entrypoint.sh` | First-boot: volume chown (including Cursor's split `~/.cursor` + `~/.config/cursor`), config seeding, host auth import, transcript relocation/backup, Docker config isolation from DevPod, Docker GID alignment |
-| `.devcontainer/devcontainer.json` | Shared VS Code/VSCodium config: volume mounts, host auth bind mounts, and the Codium-safe extension set |
-| `.devcontainer/devcontainer.gpu.json` | Shared GPU-enabled variant for hosts with NVIDIA passthrough configured |
+| `.devcontainer/devcontainer.json` | Default VS Code/VSCodium config (GPU-enabled): volume mounts, host auth bind mounts, the Codium-safe extension set, and NVIDIA passthrough for hosts with the required runtime configured |
+| `.devcontainer/devcontainer.non-gpu.json` | Opt-in plain/CPU-only variant: same shared config, volume mounts, host auth bind mounts, and Codium-safe extension set, without NVIDIA passthrough |
 | `.devcontainer/install-openai-chatgpt-vsix.sh` | Post-attach helper that verifies/pins the remote `openai.chatgpt` extension version and can repair it from a cached host-side VSIX |
 | `.devcontainer/devpod-rebuild.sh` | Preferred local DevPod rebuild wrapper for agents after `.devcontainer/` edits |
 | `docker-compose.vps.yml` | VPS services: archon bot + workstation |
@@ -68,18 +68,18 @@ See `.env.vps.example` for the full list. Key options:
 
 ## GPU support
 
-`devcontainer.json` keeps GPU passthrough commented out by default. Uncomment the GPU-related `runArgs` and `containerEnv` lines only on hosts with the required NVIDIA/runtime or `/dev/dri` device support.
+`devcontainer.json` is now the default profile and has GPU passthrough enabled directly (the GPU-related `runArgs` and `containerEnv` lines are live, not commented out) — use it on hosts with the required NVIDIA/runtime or `/dev/dri` device support. `devcontainer.non-gpu.json` is the CPU-only opt-out for hosts without that support.
 
-For DevPod rebuilds on NVIDIA hosts, prefer `./.devcontainer/devpod-rebuild.sh --gpu`. That uses `.devcontainer/devcontainer.gpu.json` so the workspace starts with GPU device requests and `nvidia-smi` access.
+For DevPod rebuilds on non-NVIDIA hosts, use `./.devcontainer/devpod-rebuild.sh --non-gpu`. That uses `.devcontainer/devcontainer.non-gpu.json` so the workspace starts without GPU device requests.
 
-The helper uses `.devcontainer/devcontainer.json` by default and switches to `.devcontainer/devcontainer.gpu.json` when `--gpu` is passed.
+The helper uses `.devcontainer/devcontainer.json` (GPU-enabled) by default and switches to `.devcontainer/devcontainer.non-gpu.json` when `--non-gpu` is passed.
 
 ## Agent workflow
 
-When an agent changes `.devcontainer/Dockerfile`, `.devcontainer/devcontainer.json`, or `.devcontainer/entrypoint.sh`, prefer rebuilding through `./.devcontainer/devpod-rebuild.sh` instead of the VSCodium DevPod UI command.
+When an agent changes `.devcontainer/Dockerfile`, `.devcontainer/devcontainer.json`, `.devcontainer/devcontainer.non-gpu.json`, or `.devcontainer/entrypoint.sh`, prefer rebuilding through `./.devcontainer/devpod-rebuild.sh` instead of the VSCodium DevPod UI command.
 
-- Default rebuild: `./.devcontainer/devpod-rebuild.sh`
-- GPU rebuild: `./.devcontainer/devpod-rebuild.sh --gpu`
+- Default rebuild (GPU): `./.devcontainer/devpod-rebuild.sh`
+- Non-GPU rebuild: `./.devcontainer/devpod-rebuild.sh --non-gpu`
 - Rebuild and open Codium: `./.devcontainer/devpod-rebuild.sh --open`
 - Browser fallback if Codium attach is flaky: `./.devcontainer/devpod-rebuild.sh --ide openvscode --open`
 - Explicit profile override: `./.devcontainer/devpod-rebuild.sh --devcontainer <path>`

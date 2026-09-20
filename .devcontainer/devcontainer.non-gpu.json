@@ -1,5 +1,5 @@
 {
-  "name": "Claude Code Sandbox (GPU)",
+  "name": "Claude Code Sandbox",
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
@@ -9,13 +9,10 @@
   },
   "runArgs": [
     "--init",
-    "--network=host",
-    "--device=nvidia.com/gpu=all",
-    "--device=/dev/dri",
-    "--env=NVIDIA_DRIVER_CAPABILITIES=all"
+    "--network=host"
+    // GPU passthrough lives in devcontainer.json (the default profile).
   ],
-  // forwardPorts is incompatible with --network=host (ports are already
-  // accessible on the host). Kept commented for reference.
+  // forwardPorts is incompatible with --network=host (ports are already reachable on the host).
   // "forwardPorts": [3001, "9000-9100"],
   "customizations": {
     "vscode": {
@@ -33,38 +30,47 @@
     }
   },
   "remoteUser": "agent",
+  // Keep our ENTRYPOINT (devcontainer-entrypoint) — VS Code's default sleep-loop wrapper would skip volume chown/config seeding/auth import.
   "overrideCommand": false,
   "initializeCommand": "mkdir -p ${localEnv:HOME}/.claude ${localEnv:HOME}/.codex ${localEnv:HOME}/.gemini ${localEnv:HOME}/.forge ${localEnv:HOME}/.cursor ${localEnv:HOME}/.config/cursor ${localEnv:HOME}/.ssh ${localEnv:HOME}/.config/Code/CachedExtensionVSIXs ${localEnv:HOME}/.config/VSCodium/CachedExtensionVSIXs",
   "mounts": [
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
+
+    // Persistent per-workspace state; entrypoint seeds these from /opt/devcontainer-home on each boot.
     "source=claude-home-${devcontainerId},target=/home/agent/.claude,type=volume",
     "source=codex-home-${devcontainerId},target=/home/agent/.codex,type=volume",
     "source=gemini-home-${devcontainerId},target=/home/agent/.gemini,type=volume",
     "source=forge-home-${devcontainerId},target=/home/agent/.forge,type=volume",
+    // Cursor splits state: ~/.cursor (sessions/skills/worktrees) + ~/.config/cursor (config/auth).
     "source=cursor-home-${devcontainerId},target=/home/agent/.cursor,type=volume",
     "source=cursor-config-${devcontainerId},target=/home/agent/.config/cursor,type=volume",
+    // No host import for gh — run `gh auth login` once inside; the token persists here across rebuilds.
     "source=gh-config-${devcontainerId},target=/home/agent/.config/gh,type=volume",
+
+    // Read-only sources for first-boot auth import into the volumes above; safe if empty.
     "source=${localEnv:HOME}/.claude,target=/mnt/host-claude,type=bind,readonly",
     "source=${localEnv:HOME}/.codex,target=/mnt/host-codex,type=bind,readonly",
     "source=${localEnv:HOME}/.gemini,target=/mnt/host-gemini,type=bind,readonly",
     "source=${localEnv:HOME}/.forge,target=/mnt/host-forge,type=bind,readonly",
+    // Cursor's auth.json lives at ~/.config/cursor on the host, not ~/.cursor.
     "source=${localEnv:HOME}/.config/cursor,target=/mnt/host-cursor,type=bind,readonly",
     "source=${localEnv:HOME}/.ssh,target=/mnt/host-ssh,type=bind,readonly",
-    // Read-only extension sources so postAttach can pin/repair the remote
-    // OpenAI ChatGPT extension from a host-side VSIX when available.
+    // Lets postAttach pin/repair the remote OpenAI ChatGPT extension from a host-side VSIX.
     "source=${localEnv:HOME}/.config/Code/CachedExtensionVSIXs,target=/mnt/host-vscode-vsix-cache,type=bind,readonly",
     "source=${localEnv:HOME}/.config/VSCodium/CachedExtensionVSIXs,target=/mnt/host-vscodium-vsix-cache,type=bind,readonly",
+
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
   ],
   "containerEnv": {
     "NODE_OPTIONS": "--max-old-space-size=4096",
     "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
+    // Archon (compiled Bun binary) needs an explicit claude path — it doesn't look on PATH.
     "CLAUDE_BIN_PATH": "/home/agent/.bun/bin/claude",
+    // Archon state (DB, config, worktrees) persists here, next to /workspace/.archon/workflows/.
+    // See entrypoint.sh step 1c for the two symlinks that cover Archon's config gaps.
     "ARCHON_HOME": "/workspace/.archon",
-    "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
-    "NVIDIA_VISIBLE_DEVICES": "all",
-    "NVIDIA_DRIVER_CAPABILITIES": "all",
-    "DISPLAY": "${localEnv:DISPLAY}"
+    "POWERLEVEL9K_DISABLE_GITSTATUS": "true"
+    // NVIDIA_VISIBLE_DEVICES / NVIDIA_DRIVER_CAPABILITIES live in devcontainer.json.
   },
   "postAttachCommand": "bash .devcontainer/install-openai-chatgpt-vsix.sh",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",

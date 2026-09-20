@@ -10,11 +10,12 @@ Rebuild or create this repo's DevPod workspace without relying on the
 flaky DevPod desktop integration.
 
 Options:
-  --workspace NAME   Override the DevPod workspace id. Default: repo folder name
+  --workspace NAME   Override the DevPod workspace id.
+                     Default: docker-gpu, or docker with --non-gpu
   --provider NAME    DevPod provider to use. Default: docker
   --ide NAME         IDE mode for DevPod. Default: codium
                      Common values: codium, none, openvscode
-  --gpu              Use the GPU-enabled devcontainer profile
+  --non-gpu          Use the plain (CPU-only) devcontainer profile instead of the GPU default
   --devcontainer PATH
                      Override the devcontainer config path explicitly
   --open             Allow DevPod to open the chosen IDE after startup
@@ -25,7 +26,7 @@ Options:
 
 Examples:
   .devcontainer/devpod-rebuild.sh
-  .devcontainer/devpod-rebuild.sh --gpu
+  .devcontainer/devpod-rebuild.sh --non-gpu
   .devcontainer/devpod-rebuild.sh --open
   .devcontainer/devpod-rebuild.sh --ide openvscode --open
   .devcontainer/devpod-rebuild.sh --workspace docker --dry-run
@@ -36,11 +37,12 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 
 workspace_path="$repo_root"
-workspace_id="$(basename "$repo_root")"
+workspace_id=""
+workspace_id_set=false
 provider="docker"
 ide="codium"
 open_ide=false
-gpu=false
+gpu=true
 reset=false
 dry_run=false
 devcontainer_path=""
@@ -49,6 +51,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --workspace)
       workspace_id="${2:?missing workspace name}"
+      workspace_id_set=true
       shift 2
       ;;
     --provider)
@@ -63,8 +66,8 @@ while [[ $# -gt 0 ]]; do
       open_ide=true
       shift
       ;;
-    --gpu)
-      gpu=true
+    --non-gpu)
+      gpu=false
       shift
       ;;
     --reset)
@@ -96,6 +99,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$workspace_id_set" != true ]]; then
+  if [[ "$gpu" == true ]]; then
+    workspace_id="docker-gpu"
+  else
+    workspace_id="docker"
+  fi
+fi
+
 workspace_path="$(cd "$workspace_path" && pwd)"
 
 if ! command -v devpod >/dev/null 2>&1; then
@@ -122,9 +133,9 @@ fi
 
 if [[ -z "$devcontainer_path" ]]; then
   if [[ "$gpu" == true ]]; then
-    devcontainer_path=".devcontainer/devcontainer.gpu.json"
-  else
     devcontainer_path=".devcontainer/devcontainer.json"
+  else
+    devcontainer_path=".devcontainer/devcontainer.non-gpu.json"
   fi
 fi
 
