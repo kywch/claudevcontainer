@@ -146,8 +146,13 @@ find_cached_vsix() {
 }
 
 current_version="$(installed_version_from_disk || true)"
+
+# Repair a stale/incompatible bundled Codex CLI binary regardless of whether
+# the extension's version happens to match expected_version below — that
+# match is only relevant to the reinstall/cache logic that follows.
+patch_extension_codex_binary
+
 if [ "$current_version" = "$expected_version" ]; then
-  patch_extension_codex_binary
   echo "[codex-vsix] Remote $extension_id is $current_version."
   exit 0
 fi
