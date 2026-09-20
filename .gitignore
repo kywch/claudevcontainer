@@ -9,6 +9,9 @@
 !CLAUDE.md
 !AGENTS.md
 
+# Claude Code's own synced skill cache (per-session/account bucket dirs)
+.devcontainer/skills/synced/
+
 # Seeds issue tracking
 !/.seeds/
 !/.seeds/**
