@@ -7,10 +7,11 @@ ENV TZ="$TZ"
 # Code's forwarded LC_ALL (node:20 ships no generated locales).
 # Robotics sim deps installed in a separate apt-get below: OpenGL/EGL/X11/Vulkan userspace libs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bubblewrap fzf git gh jq less locales man-db nano procps rclone rsync sudo unzip vim vulkan-tools zsh && \
+    bubblewrap fzf git git-lfs gh jq less locales man-db nano procps rclone rsync sudo unzip vim vulkan-tools zsh && \
   apt-get install -y --no-install-recommends \
     libgl1 libegl1 libxext6 libvulkan1 && \
   echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && locale-gen && \
+  git lfs install --system && \
   apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # CUDA compiler matching the project's PyTorch cu128 build. Install only the
