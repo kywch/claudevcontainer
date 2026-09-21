@@ -66,6 +66,14 @@ RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
   apt-get update && apt-get install -y --no-install-recommends google-cloud-cli && \
   apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# AWS CLI v2
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
+      -o /tmp/awscliv2.zip && \
+  unzip -q /tmp/awscliv2.zip -d /tmp && \
+  /tmp/aws/install && \
+  rm -rf /tmp/awscliv2.zip /tmp/aws && \
+  aws --version
+
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
