@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+health_url=http://127.0.0.1:8000/health
+
+if ! curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1; then
+  # b200 is the SSH hostname/alias for the remote GPU host.
+  ssh -fNT \
+    -o ExitOnForwardFailure=yes \
+    -o BatchMode=yes \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -L 127.0.0.1:8000:127.0.0.1:8000 \
+    b200
+
+  for _ in {1..20}; do
+    curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1 && break
+    sleep 0.25
+  done
+  curl -fsS --max-time 2 "$health_url" >/dev/null
+fi
+
+exec codex --profile vllm "$@"
