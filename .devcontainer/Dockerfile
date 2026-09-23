@@ -161,9 +161,6 @@ COPY --chown=$USERNAME:$USERNAME home/ /opt/devcontainer-home/
 # Codex prompt-level guidance (caveman style only) is authored directly in
 # .devcontainer/home/.codex/AGENTS.md and placed by the COPY above.
 
-# Lazy B200 vLLM launcher. It opens the private SSH tunnel only when needed.
-COPY --chmod=0755 codex-vllm /usr/local/bin/codex-vllm
-
 # Entrypoint: first-boot volume ownership, config seeding, auth import.
 # Last so entrypoint.sh edits only invalidate this layer.
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/devcontainer-entrypoint
