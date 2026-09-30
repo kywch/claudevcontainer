@@ -21,3 +21,9 @@ Use the ponytail skill for code changes, including its proportional testing guid
 Delegate routine test execution and concise failure reporting to smaller models. Use stronger models when selecting test coverage requires substantial judgment or failures are complex.
 
 The main agent owns the verification plan and reviews the evidence. Do not repeat successful subagent checks unless the code, environment, or confidence in the results has changed.
+
+# Codex delegation
+
+When asked to use Codex, delegate to the `codex` subagent in `~/.claude/agents/codex.md`. It invokes `codex exec --sandbox danger-full-access` directly and returns the result to Claude. Provide the repository path, task context, constraints, and whether edits are authorized.
+
+Use this route instead of the `codex@openai-codex` plugin, whose sandbox overrides fail inside this container. Direct delegation uses the existing Codex login and configured model. It disables Codex's inner sandbox and approval prompts, so use it only for trusted work.

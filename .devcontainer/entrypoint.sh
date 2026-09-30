@@ -111,16 +111,6 @@ done
 #     script so new skills can be linked without rebuilding.
 AGENT_HOME="$AGENT_HOME" TOOLS="${TOOLS[*]}" /workspace/.devcontainer/update-skills.sh
 
-# 2b. Install Claude Code plugins (idempotent — skips if already installed).
-#     Registration lives in ~/.claude.json inside the volume, so this must run
-#     at boot (not build time). Needs network on first install.
-if command -v claude >/dev/null 2>&1; then
-  if ! claude plugin list 2>/dev/null | grep -q "codex@openai-codex"; then
-    claude plugin marketplace add openai/codex-plugin-cc 2>&1 || true
-    claude plugin install codex@openai-codex --scope user 2>&1 || true
-  fi
-fi
-
 # 3. Auth import from host binds.
 #    Import on first boot, then refresh when the host credential is newer. This
 #    keeps browser-based OAuth on the host, where localhost callbacks work, while

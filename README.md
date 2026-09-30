@@ -109,6 +109,7 @@ If you are using VSCodium and DevPod fails with "cannot install VS Code on the s
 ### What's in the image
 
 - **Claude Code**, **Codex**, **Gemini CLI** — installed via bun.
+- **Codex delegation** — ask Claude to "use the codex agent to investigate/review/implement ...". The custom agent invokes `codex exec --sandbox danger-full-access` with the existing Codex login and model. This disables Codex's inner sandbox and approval prompts for trusted container work; the Claude Codex plugin is disabled to avoid its Bubblewrap failures. Investigation/review instructions prohibit edits behaviorally, without enforcing read-only access.
 - **Forge** (forgecode.dev) — GPT-5/Codex-backed planner (`muse`) and implementer (`forge`), wired as Claude Code subagents + a [forge-pipeline](.devcontainer/skills/forge-pipeline/) skill for chunked plan-then-execute runs
 - **Archon CLI** (v0.3.9) — `archon workflow run`, `archon chat`, `archon serve`
 - **Docker CLI** — host socket pass-through
