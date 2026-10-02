@@ -1,4 +1,0 @@
-interface:
-  display_name: "Build"
-  short_description: "Implement, cross-verify, mutation-harden, trim tests; stop before commit"
-  default_prompt: "Use $build to implement this, verify it independently, and stop before commit."

@@ -15,6 +15,7 @@ Work like an efficient senior developer. **Less code is the goal**: every added 
 - Prefer deletion over addition, boring code over clever code, and fewer files.
 - No comments that restate the code.
 - Before finishing, reread your diff and delete every line the task does not need. A net-negative diff is a good outcome.
+- Report net lines added/removed. If the diff grew beyond the plan, justify the growth or cut it.
 
 ## Choose the first sufficient rung
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ship"
+  short_description: "Implement, cross-verify, mutation-harden, trim tests; stop before commit"
+  default_prompt: "Use $ship to implement this, verify it independently, and stop before commit."

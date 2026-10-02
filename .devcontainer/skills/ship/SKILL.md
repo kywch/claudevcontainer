@@ -1,10 +1,10 @@
 ---
-name: build
-description: Orchestrate a coding task end to end — implement with a subagent, verify with an independent other-vendor reviewer (with arch-review), loop on findings, harden with mutation testing, trim tests, then stop before commit with a prepared commit message. Use when the user invokes /build or $build, or asks to "implement then verify", "use subagent to implement/fix, then independently verify", or "edit, then review". Not for running a project's build command. Flags --plan, --verifier=other|codex|claude, --rounds=N, --no-mutation, --branch=NAME. Never commits.
+name: ship
+description: Orchestrate a coding task end to end — implement with a subagent, verify with an independent other-vendor reviewer (with arch-review), loop on findings, harden with mutation testing, trim tests, then stop before commit with a prepared commit message. Use when the user invokes /ship or $ship, or asks to "implement then verify", "use subagent to implement/fix, then independently verify", or "edit, then review". Not for running a project's build command. Flags --plan, --verifier=other|codex|claude, --rounds=N, --no-mutation, --branch=NAME. Never commits.
 effort: medium
 ---
 
-# Build
+# Ship
 
 Orchestrate; do not implement in the main thread. The main agent owns scope, gates, and the final report. Less code is the goal of every stage.
 
@@ -54,7 +54,7 @@ Keep the delegate; fix rounds go back to it.
 
 ## 2. Verify
 
-Write the brief to `mktemp /tmp/build-verify-XXXXXX.md`: task, acceptance criteria, BASE, task-owned paths, and the instruction to read `<abs skills-dir>/arch-review/SKILL.md` and apply it in `--mode=bug` to those paths (skip for docs/config-only diffs). Required output:
+Write the brief to `mktemp /tmp/ship-verify-XXXXXX.md`: task, acceptance criteria, BASE, task-owned paths, and the instruction to read `<abs skills-dir>/arch-review/SKILL.md` and apply it in `--mode=bug` to those paths (skip for docs/config-only diffs). Required output:
 
 ```text
 VERDICT: PASS | FAIL
@@ -77,7 +77,7 @@ On FAIL, send only the findings (ids + evidence) to the implementer. Re-verify s
 Mutate before trimming: the kill matrix is the evidence for trimming. Delegate (default tier, ponytail brief) to work in a scratch copy, never the real tree:
 
 ```bash
-SCRATCH=$(mktemp -d /tmp/build-mut-XXXXXX) && echo "$SCRATCH"   # shell state does not persist: note the path
+SCRATCH=$(mktemp -d /tmp/ship-mut-XXXXXX) && echo "$SCRATCH"   # shell state does not persist: note the path
 REF=$(git stash create) &&               # empty on a clean tree
 git worktree add --detach "$SCRATCH" "${REF:-HEAD}" &&
 git ls-files --others --exclude-standard -z | rsync -a --from0 --files-from=- ./ "$SCRATCH"/
@@ -107,7 +107,7 @@ If steps 4–5 changed anything, run one scoped verify of the hunks changed sinc
 Never stage, commit, or push. Revisit the plan — the `--plan` output, a plan agreed earlier in the conversation, or the step-0 criteria — and mark each item. ≤15 lines; group plan items when more than 5:
 
 ```text
-Build: <task, ≤10 words> — READY | BLOCKED
+Ship: <task, ≤10 words> — READY | BLOCKED
 Plan: <n>/<m> done
   ✓ <item>
   ~ <item> — changed: <how and why>
@@ -123,4 +123,4 @@ Commit: git add -- <paths> && git commit -F <msg-file> -- <paths>
 
 The trailing `-- <paths>` commits only those paths even if other files are staged. List only task-owned paths.
 
-Write `<msg-file>` (`mktemp /tmp/build-commit-XXXXXX.txt`): an imperative subject ≤72 chars, a blank line, then the Plan, Verify, Mutation, and Tests lines as the body, plus any attribution trailer the session requires. When the user later says "commit", re-check `git status` against the listed paths, then use exactly this file and these paths.
+Write `<msg-file>` (`mktemp /tmp/ship-commit-XXXXXX.txt`): an imperative subject ≤72 chars, a blank line, then the Plan, Verify, Mutation, and Tests lines as the body, plus any attribution trailer the session requires. When the user later says "commit", re-check `git status` against the listed paths, then use exactly this file and these paths.

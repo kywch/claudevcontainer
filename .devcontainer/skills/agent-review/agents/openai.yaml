@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Review"
+  short_description: "Weekly AI-habits review: level, lessons, next experiment"
+  default_prompt: "Use $agent-review to review my last 7 days of agent sessions."

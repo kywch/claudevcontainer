@@ -53,6 +53,16 @@ Give subagents clear objectives, relevant context, and boundaries. Request conci
 
 Use the ponytail skill for code changes, including its proportional testing guidance. Ensure coding subagents also follow it.
 
+For non-trivial code changes, and whenever the user asks to implement then verify or review, run the `ship` skill instead of hand-chaining implement → review → commit. It stops before commit; commit locally yourself only if asked, per Shared side effects below.
+
 Delegate routine test execution and concise failure reporting to smaller models. Use stronger models when selecting test coverage requires substantial judgment or failures are complex.
 
 The main agent owns the verification plan and reviews the evidence. Do not repeat successful subagent checks unless the code, environment, or confidence in the results has changed.
+
+# Shared side effects
+
+Never push, open, close, or comment on PRs or issues, post messages, or otherwise write to a shared remote or service without the user's explicit OK for that specific action. Approval of one action does not cover the next. Commit locally only when asked.
+
+# Writing for others
+
+PR bodies, issues, comments, and messages: short, plain, factual. No selling, no filler headers, no restating the diff.
