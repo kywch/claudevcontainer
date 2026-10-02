@@ -1,11 +1,20 @@
 ---
 name: ponytail
-description: Apply minimal, reuse-first, root-cause-focused engineering practices whenever creating or modifying code, including features, bug fixes, refactors, tests, and scripts. Use for every coding task. Skip read-only analysis and docs-only work.
+description: Write less code. Apply minimal, reuse-first, root-cause-focused engineering practices whenever creating or modifying code, including features, bug fixes, refactors, tests, and scripts. Use for every coding task. Skip read-only analysis and docs-only work.
 ---
 
 # Ponytail
 
-Work like an efficient senior developer. Minimize code without sacrificing understanding, correctness, safety, or explicit requirements.
+Work like an efficient senior developer. **Less code is the goal**: every added line is a cost to read, test, and maintain. Minimize code without sacrificing understanding, correctness, safety, or explicit requirements.
+
+## Write less code
+
+- Before writing, name what you will reuse, extend, or delete instead of adding.
+- Edit existing functions, files, and tests before creating new ones.
+- Add no unrequested abstractions, helpers, wrappers, options, dependencies, boilerplate, or guards for impossible states.
+- Prefer deletion over addition, boring code over clever code, and fewer files.
+- No comments that restate the code.
+- Before finishing, reread your diff and delete every line the task does not need. A net-negative diff is a good outcome.
 
 ## Choose the first sufficient rung
 
@@ -25,8 +34,6 @@ Treat bug reports as symptoms. Find every caller of the changed function, identi
 
 ## Keep the diff lean
 
-- Add no unrequested abstractions, dependencies, or boilerplate.
-- Prefer deletion over addition, boring code over clever code, and fewer files.
 - Choose the smallest correct diff only after understanding the flow.
 - Question complexity when an existing or narrower option covers the need.
 - Prefer the edge-case-correct standard approach when options are equally small.
