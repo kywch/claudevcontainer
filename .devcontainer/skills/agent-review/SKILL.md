@@ -21,7 +21,7 @@ If sessions total fewer than ~10, say the data looks thin and check you are read
 
 It emits per-kind session summaries (main / subagent / exec; active hours from gaps ≤30 min, user turns), the longest main sessions, prompt/slash counts, slash commands, permission modes, tool calls, Claude subagent `type:model` pairs, skills used (Claude Skill calls, Codex SKILL.md reads), and every typed prompt (truncated, pasted content excluded). The output is large (~250KB for a busy week): read it with `jq 'del(.prompts)'` first, then filter `.prompts` by tool, project, or keyword. Open specific transcripts (`~/.claude/projects/*/<sessionId>.jsonl`, `~/.codex/sessions/`) only to confirm a pattern.
 
-Read the newest previous review in `${AGENT_REVIEW_DIR:-$HOME/.agent-reviews}/`: its level, its experiment, and its proposals. None → mark this as the first review and omit deltas.
+`<repo>` is `git -C "$(realpath <skill-dir>)" rev-parse --show-toplevel` — the same bind-mounted folder from host and container. Read the newest previous review in `<repo>/.agent-reviews/`: its level, its experiment, and its proposals. None → mark this as the first review and omit deltas.
 
 Every claim must cite the collected data or a transcript; do not credit work that only appears as discussion.
 
@@ -30,6 +30,8 @@ Every claim must cite the collected data or a transcript; do not credit work tha
 **Level** (Every's eight levels; higher is not always better — match level to stakes):
 1 Chatbot · 2 Copilot · 3 Agent (approves steps) · 4 Autopilot (reviews only final output) · 5 Workflows (skills, quality gates) · 6 Assistant (proactive background work) · 7 Multi-agent (several long-running agents) · 8 Orchestrator (a manager agent runs the team).
 Score to one decimal with 3 evidence bullets, and the change vs last week.
+
+**What agents did** — group prompts and sessions by project; per project, summarize outcomes (shipped, fixed, investigated, abandoned) from the prompts, not tool counts.
 
 **Lessons** — cluster prompts where the user corrects, restates, or blocks the agent ("no", "don't", "wait", "instead", "again", "concise", "do not edit/commit", repeated instructions). A cluster qualifies at ≥2 occurrences, or once if severe (agent edited or committed after being told not to, destroyed work, leaked a secret). For each, grep the shared configs before proposing — resolve `D=$(realpath <skill-dir>)` first, since installed skill dirs are symlinks:
 
@@ -43,44 +45,49 @@ Rule missing → propose adding it. Rule exists but was violated → propose sha
 
 ## 3. Write the review
 
-Write `${AGENT_REVIEW_DIR:-$HOME/.agent-reviews}/<YYYY>-W<ww>.md` (ISO week):
+Write `<repo>/.agent-reviews/<YYYY>-W<ww>.md` (ISO week):
 
 ```markdown
-# Agent review <YYYY>-W<ww> (<start>–<end>)
-Level: <x.y> (<±d> vs last week) — <one-line why>
-Activity: <claude n sessions / m prompts>, <codex n / m>; subagents <n> (<inherit k>); skills <names>
+# Agent review <YYYY>-W<ww> · <Mon d>–<Mon d>
 
-## Evidence
-- …
+**At a glance**
+- **Did:** <one line: the main things agents worked on>
+- **Biggest opportunity:** <one line>
+- **Level:** <x.y> (<±d> vs last week) · <claude n sessions, codex n sessions, active h>
 
-## Lessons (proposed — not applied)
-L1. <pattern> — seen <n>× (<day tool "short quote">) → <file>: <exact line(s) to add/replace>
+## What agents did last week
 
-## Missed opportunities
-- …
+| Project | Tool | Sessions | Active h | What got done |
+|---|---|---|---|---|
+| <project> | <claude/codex> | <n> | <h> | <one line, outcome not activity> |
+
+## Opportunities
+
+### 1. <short title>
+- **Seen:** <what happened, with count and a ≤15-word quote>
+- **Try instead:** <skill, rule, or command>
+- **Gain:** <time, turns, or errors saved>
+- **Proposed rule (L1):** `<file>`: <exact line to add/replace> — only when a config/skill change is the fix
 
 ## Last week's experiment
-<name>: <tried | not tried> — <result>
+**<name>** — <tried | not tried>: <result>
 
 ## Next experiment
-<one concrete thing to try, with the first command or prompt>
+**<name>** — <why>. Start with: `<command or prompt>`
 ```
+
+Keep it scannable: ≤8 table rows (group small projects as "other"), ≤4 opportunities ranked by payoff, no paragraphs over 2 lines. Opportunities cover both lessons (repeated corrections) and efficiency (manual chains, polling, wrong model tier, chores done by hand).
 
 Quote at most ~15 words per example; never copy secrets, tokens, or pasted content.
 
 ## 4. Report and stop
 
-Show ≤20 lines: level and delta, top 3 lesson ids with one line each, next experiment, and the review path; drop evidence and missed opportunities first when over budget. Then stop.
+Show ≤20 lines: the At a glance block, opportunity titles with their L ids, next experiment, and the review path. Then stop.
 
 When the user approves ids (e.g. "apply L1 L3"), apply exactly those edits, show the diff, and stop before commit. If skills changed, remind them to run `.devcontainer/update-skills.sh`.
 
-## Headless weekly run
+## Weekly run
 
-For a scheduled run, keep it read-only except for the review file, e.g.:
+`scripts/weekly.sh` (host) finds the running devcontainer, runs this skill headless inside it, and emails the newest review through the Resend API (stdlib `urllib`). Settings live in `~/.config/agent-review/mail.env` (mode 600): `RESEND_API_KEY` (send-only key), `MAIL_TO`, optional `MAIL_FROM`. `--no-mail` skips sending, `--mail-only` resends the newest review, `--force` reruns a finished week. It skips the week if the devcontainer is not running.
 
-```bash
-claude -p --effort medium --allowedTools "Bash(python3:*) Read Grep Glob Write" \
-  "Run the agent-review skill for the last 7 days."
-```
-
-Deliver the written review (file, Telegram, or email) outside the agent.
+Scheduled by a systemd user timer (`~/.config/systemd/user/agent-review.{service,timer}`, hourly, `Persistent=true`). The script runs once per ISO week on Sat/Sun, catches up a missed weekend on the next weekday the machine is on, retries hourly after a failure, and starts the devcontainer if it is stopped.

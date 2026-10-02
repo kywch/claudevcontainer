@@ -41,3 +41,4 @@
 
 # Python bytecode caches
 __pycache__/
+.agent-reviews/
