@@ -42,6 +42,8 @@ docker-compose.vps.yml
 | `.devcontainer/devpod-rebuild.sh` | Preferred local DevPod rebuild wrapper for agents after `.devcontainer/` edits |
 | `docker-compose.vps.yml` | VPS services: archon bot + workstation |
 | `.env.vps.example` | Template for VPS env vars (auth, bot tokens, streaming mode) |
+| `.devcontainer/home/` | Seeded tool configs (`.claude/CLAUDE.md`, `.codex/AGENTS.md`, agents): baked into `/opt/devcontainer-home` at image build and copied into tool homes on every boot, so edits need a rebuild (or a manual copy into both places) |
+| `.devcontainer/skills/` | Shared skills for Claude/Codex/others (`ponytail`, `ship`, `arch-review`, `agent-review`, …), symlinked into tool homes by `update-skills.sh`; `agent-review/SKILL.md` § Weekly run documents the scheduled weekly review |
 | `.archon/workflows/` | Archon workflow YAMLs — committed, editable, take effect immediately for CLI |
 
 ## Entrypoint behavior (`entrypoint.sh`)

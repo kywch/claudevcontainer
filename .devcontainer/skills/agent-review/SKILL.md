@@ -88,6 +88,35 @@ When the user approves ids (e.g. "apply L1 L3"), apply exactly those edits, show
 
 ## Weekly run
 
-`scripts/weekly.sh` (host) finds the running devcontainer, runs this skill headless inside it, and emails the newest review through the Resend API (stdlib `urllib`). Settings live in `~/.config/agent-review/mail.env` (mode 600): `RESEND_API_KEY` (send-only key), `MAIL_TO`, optional `MAIL_FROM`. `--no-mail` skips sending, `--mail-only` resends the newest review, `--force` reruns a finished week. It skips the week if the devcontainer is not running.
+`scripts/weekly.sh` (host) starts the devcontainer if it is stopped, runs this skill headless inside it, and emails the newest review as HTML through the Resend API (stdlib `urllib`). It runs once per ISO week on Sat/Sun, catches up a missed weekend on the next weekday the machine is on, and leaves the week undone after any failure so the next hourly tick retries. Flags: `--force` reruns a finished week, `--mail-only` resends the newest review, `--no-mail` skips sending.
 
-Scheduled by a systemd user timer (`~/.config/systemd/user/agent-review.{service,timer}`, hourly, `Persistent=true`). The script runs once per ISO week on Sat/Sun, catches up a missed weekend on the next weekday the machine is on, retries hourly after a failure, and starts the devcontainer if it is stopped.
+Files (host):
+
+- `~/.config/agent-review/mail.env` (mode 600): `RESEND_API_KEY` (send-only key), `MAIL_TO` (your Resend account email), `MAIL_FROM="Agent Review <onboarding@resend.dev>"` — quote it; without a verified domain Resend only sends from that address.
+- `~/.local/state/agent-review/last-week`: last completed ISO week.
+- `<repo>/.agent-reviews/<week>.md`: the reviews (gitignored).
+- Logs: `journalctl --user -u agent-review`; next/last run: `systemctl --user list-timers agent-review.timer`.
+
+Setup — create the two units, then `systemctl --user daemon-reload && systemctl --user enable --now agent-review.timer`. User timers run only while logged in unless `loginctl enable-linger` is set.
+
+```ini
+# ~/.config/systemd/user/agent-review.service
+[Unit]
+Description=Weekly agent review (runs in devcontainer, emails result)
+
+[Service]
+Type=oneshot
+ExecStart=<repo>/.devcontainer/skills/agent-review/scripts/weekly.sh
+TimeoutStartSec=1800
+
+# ~/.config/systemd/user/agent-review.timer
+[Unit]
+Description=Weekly agent review
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
