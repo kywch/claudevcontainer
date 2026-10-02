@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Orchestrate a coding task end to end — implement with a subagent, verify with an independent other-vendor reviewer (with arch-review), loop on findings, harden with mutation testing, trim tests, then stop before commit with a prepared commit message. Use when the user invokes /ship or $ship, or asks to "implement then verify", "use subagent to implement/fix, then independently verify", or "edit, then review". Not for running a project's build command. Flags --plan, --verifier=other|codex|claude, --rounds=N, --no-mutation, --branch=NAME. Never commits.
+description: Orchestrate a coding task end to end — implement with a subagent, verify with an independent other-vendor reviewer (with arch-review), loop on findings, harden with mutation testing, trim tests, then stop before commit with a prepared commit message. Use when the user invokes /ship or $ship, or asks to "implement then verify", "use subagent to implement/fix, then independently verify", or "edit, then review". Not for running a project's build command. Flags --plan, --verifier=other|codex|claude, --rounds=N, --no-mutation, --branch=NAME, --no-branch. Never commits.
 effort: medium
 ---
 
@@ -15,7 +15,8 @@ Orchestrate; do not implement in the main thread. The main agent owns scope, gat
 - `--verifier=other|codex|claude` — default `other`: the vendor that is not running this skill. If it is unavailable, use a fresh same-vendor top-model verifier and flag `same-vendor` in the report.
 - `--rounds=N` — fix→re-verify rounds after the first verification, integer 0–3 (default 2).
 - `--no-mutation` — skip hardening. Implied for docs/config-only diffs, repos without a commit, and changes inside submodules.
-- `--branch=NAME` — `git switch -c NAME` before editing. Default: current branch.
+- `--branch=NAME` — branch name to create. Default: on the default branch, create `<type>/<slug>` (step 0); on any other branch, stay.
+- `--no-branch` — work on the current branch, even if it is the default branch.
 
 ## Host mapping
 
@@ -37,6 +38,8 @@ From the repo root (`cd "$(git rev-parse --show-toplevel)"`), record before any 
 git rev-parse HEAD          # BASE
 git status --porcelain      # pre-existing dirty/staged paths: never stage, never "fix"
 ```
+
+Branch before editing unless `--no-branch`: if the current branch is the default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`, minus the `origin/` prefix; else `main`/`master`), `git switch -c <type>/<slug>` — `<type>` is `feat`, `fix`, `refactor`, `docs`, or `chore` (follow the repo's existing prefixes if they differ), `<slug>` is 2–4 kebab-case words from the task. Use `--branch=NAME` verbatim if given. Never push.
 
 If a path to edit is already dirty, stop and ask. Restate the task, acceptance criteria, and test/lint commands (from AGENTS.md/CLAUDE.md or manifests) in ≤5 lines. If an existing feature, a config change, or a deletion already meets the criteria, say so and stop.
 
@@ -107,7 +110,7 @@ If steps 4–5 changed anything, run one scoped verify of the hunks changed sinc
 Never stage, commit, or push. Revisit the plan — the `--plan` output, a plan agreed earlier in the conversation, or the step-0 criteria — and mark each item. ≤15 lines; group plan items when more than 5:
 
 ```text
-Ship: <task, ≤10 words> — READY | BLOCKED
+Ship: <task, ≤10 words> — READY | BLOCKED · branch <name> (new | existing)
 Plan: <n>/<m> done
   ✓ <item>
   ~ <item> — changed: <how and why>
@@ -118,9 +121,9 @@ Mutation: <killed>/<total> killed, <e> errors; survivors: <id — fixed | equiva
 Tests: +<added> −<trimmed> (<reason per trim group>)
 Checks: <commands> → <pass|fail|not run: why>
 Note: <devpod-rebuild needed | follow-ups | none>
-Commit: git add -- <paths> && git commit -F <msg-file> -- <paths>
+Commit: git add -A -- <paths> && git diff --cached --name-only && git commit -F <msg-file>
 ```
 
-The trailing `-- <paths>` commits only those paths even if other files are staged. List only task-owned paths.
+`git add -A` records deletions and renames (a pathspec on `git commit` fails for deleted paths). Before committing, the staged list must be exactly the task-owned paths; if anything else is staged, stop and ask. List only task-owned paths, as `git status --porcelain` shows them (for a rename already staged by `git mv`, the new path).
 
 Write `<msg-file>` (`mktemp /tmp/ship-commit-XXXXXX.txt`): an imperative subject ≤72 chars, a blank line, then the Plan, Verify, Mutation, and Tests lines as the body, plus any attribution trailer the session requires. When the user later says "commit", re-check `git status` against the listed paths, then use exactly this file and these paths.
