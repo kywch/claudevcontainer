@@ -26,7 +26,7 @@ Orchestrate; do not implement in the main thread. The main agent owns scope, gat
 | Continue same delegate | SendMessage to its ID | send to the same subagent |
 | Default / hard / mechanical tier | `sonnet` / `opus` / `haiku` | configured default / top model / lowest tier, low effort |
 | Effort | inherited from this skill's `effort: medium` | pass medium reasoning effort |
-| Other-vendor verifier | `codex exec -s read-only -c approval_policy=never -C <repo> - < <brief>` | `claude -p --permission-mode plan --model opus --effort high < <brief>` |
+| Other-vendor verifier | `codex exec -s read-only -c approval_policy=never -c model_reasoning_effort=medium -C <repo> - < <brief>` | `claude -p --permission-mode plan --model opus --effort medium < <brief>` |
 
 Use the mechanical tier only for renames, config lines, and doc sync — never for verification or judgment. Every coding delegate gets the ponytail brief below.
 
