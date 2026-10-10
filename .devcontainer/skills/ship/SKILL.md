@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Orchestrate a coding task end to end — implement with a subagent, verify with an independent other-vendor reviewer (with arch-review), loop on findings, harden with mutation testing, trim tests, then stop before commit with a prepared commit message. Use when the user invokes /ship or $ship, or asks to "implement then verify", "use subagent to implement/fix, then independently verify", or "edit, then review". Not for running a project's build command. Flags --plan, --verifier=other|codex|claude, --rounds=N, --no-mutation, --branch=NAME, --no-branch. Never commits.
+description: Orchestrate a coding task end to end — implement with a subagent, verify with an independent other-vendor reviewer (with arch-review), loop on findings, harden with mutation testing, trim tests, then stop before commit with a prepared commit message. Use when the user invokes /ship or $ship, or asks to "implement then verify", "use subagent to implement/fix, then independently verify", or "edit, then review". Not for running a project's build command. Flags --plan, --scratch, --verifier=other|codex|claude, --rounds=N, --no-mutation, --branch=NAME, --no-branch. Never commits.
 effort: medium
 ---
 
@@ -12,6 +12,7 @@ Orchestrate; do not implement in the main thread. The main agent owns scope, gat
 
 - (default) — implement → verify → fix loop → harden → trim → final verify → report. Stop before commit.
 - `--plan` — read-only plan first; wait for an explicit "go"/"implement". Questions or feedback are **not** approval. Without `--plan`, still honor any earlier "do not edit yet" in the conversation.
+- `--scratch` — implied for experiment, debug, parity, and profiling code: implement → one verify of measurement validity → report. Skip arch-review and steps 4–5; the verifier may not request new checks, tests, or harness.
 - `--verifier=other|codex|claude` — default `other`: the vendor that is not running this skill. If it is unavailable, use a fresh same-vendor top-model verifier and flag `same-vendor` in the report.
 - `--rounds=N` — fix→re-verify rounds after the first verification, integer 0–3 (default 2).
 - `--no-mutation` — skip hardening. Implied for docs/config-only diffs, repos without a commit, and changes inside submodules.
@@ -43,6 +44,8 @@ Branch before editing unless `--no-branch`: if the current branch is the default
 
 If a path to edit is already dirty, stop and ask. Restate the task, acceptance criteria, and test/lint commands (from AGENTS.md/CLAUDE.md or manifests) in ≤5 lines. If an existing feature, a config change, or a deletion already meets the criteria, say so and stop.
 
+Criteria are the user's words. Add no retries, polling, fallbacks, opt-in/dual paths, or compatibility with old data unless asked. Give a net-LOC estimate; if the diff exceeds 2× it, cut or ask before verifying.
+
 With `--plan`: spawn a plan delegate, show the plan, then stop until the user says go.
 
 ## 1. Implement
@@ -61,7 +64,7 @@ Write the brief to `mktemp /tmp/ship-verify-XXXXXX.md`: task, acceptance criteri
 
 ```text
 VERDICT: PASS | FAIL
-FINDINGS: [{id, severity: blocker|major|minor, file:line, problem, evidence}]   # include arch-review Defects/Design risks
+FINDINGS: [{id, severity: blocker|major|minor, file:line, problem, evidence}]   # arch-review Defects only; Design risks are minor
 CHECKS RUN: commands/reads actually performed, with results; commands blocked by the sandbox
 FALSIFICATION: ≥1 concrete attempt to break the change and its outcome
 SURPLUS: [{file:line-range, why removable}]
@@ -73,7 +76,7 @@ The main agent runs any sandbox-blocked commands and appends results. Malformed 
 
 ## 3. Fix loop
 
-On FAIL, send only the findings (ids + evidence) to the implementer. Re-verify scoped to those ids, the hunks changed since the last round, and their callers — no new scope. When `--rounds` is exhausted with open blocker/major findings, stop: skip steps 4–5 and report BLOCKED. Minor findings: fix if trivial, else list.
+On FAIL, triage: send a finding (id + evidence) to the implementer only if it shows a reachable failure of the acceptance criteria. Fixes needing a new guard, option, test file, or >20 lines, and anything about future or legacy cases, go to the report as follow-ups. Re-verify scoped to those ids, the hunks changed since the last round, and their callers — no new scope. When `--rounds` is exhausted with open blocker/major findings, stop: skip steps 4–5 and report BLOCKED. Minor findings: fix if trivial, else list.
 
 ## 4. Harden — mutation testing
 
@@ -89,7 +92,7 @@ git ls-files --others --exclude-standard -z | rsync -a --from0 --files-from=- ./
 1. Run the relevant tests in `$SCRATCH` first; if the baseline fails, stop and report.
 2. Mutate only changed logic, at most 10 mutants or 10 minutes: an installed tool scoped to changed files (`mutmut`, `cargo-mutants`, Stryker, `go-mutesting`) or hand mutants — negate a condition, off-by-one a bound, drop a call or guard, swap a return, remove an error path.
 3. Per mutant, record killed (assertion failure), survived, or error (crash/timeout, not a kill), and which tests killed it.
-4. For each survivor, in the real tree: tighten an existing assertion or add a case to an existing parametrized test; add a new test only if neither works; or justify it as equivalent. Re-apply the mutant in `$SCRATCH` to confirm the new check kills it.
+4. For each survivor, in the real tree: tighten an existing assertion or add a case to an existing parametrized test; otherwise list the survivor in the report — add a new test only for an acceptance criterion — or justify it as equivalent. Re-apply the mutant in `$SCRATCH` to confirm the new check kills it.
 5. Always finish, including after failure: `git worktree remove --force <scratch>`.
 
 ## 5. Trim tests

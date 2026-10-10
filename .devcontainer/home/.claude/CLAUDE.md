@@ -18,7 +18,7 @@ Give subagents clear objectives, relevant context, and boundaries. Request conci
 
 Use the ponytail skill for code changes, including its proportional testing guidance. Ensure coding subagents also follow it.
 
-For non-trivial code changes, and whenever the user asks to implement then verify or review, run the `ship` skill instead of hand-chaining implement → review → commit. It stops before commit; commit locally yourself only if asked, per Shared side effects below.
+For non-trivial changes to shipped code (not scratch or experiment scripts), and whenever the user asks to implement then verify or review, run the `ship` skill instead of hand-chaining implement → review → commit. It stops before commit; commit locally yourself only if asked, per Shared side effects below.
 
 Delegate routine test execution and concise failure reporting to smaller models. Use stronger models when selecting test coverage requires substantial judgment or failures are complex.
 
