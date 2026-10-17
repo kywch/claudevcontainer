@@ -33,11 +33,14 @@ Do this only when the user asked for the pause.
 ssh b200 'R=/NHNHOME/WORKSPACE/26motir001_F; cd $R/<repo>-<sha> && setsid nohup bash -c "flock -n $R/.b200-gpu.lock <cmd>; echo \$? > <run>/run.exit" > <run>/run.log 2>&1 < /dev/null & echo $!'
 ```
 
-Report the PID, log path, and ETA once.
+Always detached like this, never as a subagent's child — the job must outlive the turn and the agent. Report the PID, log path, and ETA once.
 
-## 4. Poll in-turn
+## 4. Watch
 
-Check `ps -p`, `tail run.log`, and `run.exit` every 10–15 minutes. Speak up only for: done, nonzero exit, NaN/inf in the log, or no log progress across 2 checks. Don't send progress updates in between.
+Check `ps -p`, `tail run.log`, and `run.exit`. Speak up only for: done, nonzero exit, NaN/inf or a traceback in the log, or no log progress across 2 checks. Don't send progress updates in between.
+
+- Claude Code: use `Monitor` with a shell loop (every 3 min) that prints a line only on those events. Never `ScheduleWakeup` — it fires late.
+- Codex/others: poll in-turn every 10–15 min.
 
 ## 5. Copy back and eval
 

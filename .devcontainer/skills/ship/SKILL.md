@@ -11,13 +11,13 @@ Orchestrate; do not implement in the main thread. The main agent owns scope, gat
 ## Flags
 
 - (default) — implement → verify → fix loop → harden → trim → final verify → report. Stop before commit.
-- `--plan` — read-only plan first; wait for an explicit "go"/"implement". Questions or feedback are **not** approval. Without `--plan`, still honor any earlier "do not edit yet" in the conversation.
-- `--scratch` — implied for experiment, debug, parity, and profiling code: implement → one verify of measurement validity → report. Skip arch-review and steps 4–5; the verifier may not request new checks, tests, or harness.
+- `--plan` — read-only plan first; wait for an explicit "go". Questions or feedback are not approval.
+- `--scratch` — implied for experiment, debug, parity, and profiling code: implement → one verify of measurement validity → report. Skip arch-review and steps 4–5; no new checks, tests, or harness.
 - `--verifier=other|codex|claude` — default `other`: the vendor that is not running this skill. If it is unavailable, use a fresh same-vendor top-model verifier and flag `same-vendor` in the report.
 - `--rounds=N` — fix→re-verify rounds after the first verification, integer 0–3 (default 2).
 - `--no-mutation` — skip hardening. Implied for docs/config-only diffs, repos without a commit, and changes inside submodules.
-- `--branch=NAME` — branch name to create. Default: on the default branch, create `<type>/<slug>` (step 0); on any other branch, stay.
-- `--no-branch` — work on the current branch, even if it is the default branch.
+- `--branch=NAME` — branch to create. Default: `<type>/<slug>` if on the default branch (step 0), else stay.
+- `--no-branch` — stay on the current branch.
 
 ## Host mapping
 
@@ -40,11 +40,11 @@ git rev-parse HEAD          # BASE
 git status --porcelain      # pre-existing dirty/staged paths: never stage, never "fix"
 ```
 
-Branch before editing unless `--no-branch`: if the current branch is the default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`, minus the `origin/` prefix; else `main`/`master`), `git switch -c <type>/<slug>` — `<type>` is `feat`, `fix`, `refactor`, `docs`, or `chore` (follow the repo's existing prefixes if they differ), `<slug>` is 2–4 kebab-case words from the task. Use `--branch=NAME` verbatim if given. Never push.
+Branch unless `--no-branch`: on the default branch (`origin/HEAD`, else `main`/`master`), `git switch -c <type>/<slug>` (`feat|fix|refactor|docs|chore`, or the repo's prefixes; slug = 2–4 kebab words). Never push.
 
-If a path to edit is already dirty, stop and ask. Restate the task, acceptance criteria, and test/lint commands (from AGENTS.md/CLAUDE.md or manifests) in ≤5 lines. If an existing feature, a config change, or a deletion already meets the criteria, say so and stop.
+If a path to edit is already dirty, stop and ask. Restate task, acceptance criteria, and test/lint commands in ≤5 lines. If an existing feature, config change, or deletion already meets the criteria, say so and stop.
 
-Criteria are the user's words. Add no retries, polling, fallbacks, opt-in/dual paths, or compatibility with old data unless asked. Give a net-LOC estimate; if the diff exceeds 2× it, cut or ask before verifying.
+**Do not over-engineer.** Criteria are the user's words. No retries, polling, fallbacks, opt-in/dual paths, or old-data compatibility unless asked. Net LOC target ≤0 for fixes, perf work, and refactors. New test lines ≤1/3 of new code lines, except acceptance-criteria tests. Give a net-LOC estimate; if the diff exceeds 2× it, cut or ask before verifying.
 
 With `--plan`: spawn a plan delegate, show the plan, then stop until the user says go.
 
@@ -53,8 +53,8 @@ With `--plan`: spawn a plan delegate, show the plan, then stop until the user sa
 Brief the implementer with:
 
 - task, acceptance criteria, BASE, and dirty paths to leave alone; do not stage or commit;
-- "Read `<abs skills-dir>/ponytail/SKILL.md` first and follow it" — delegates do not get skills loaded. Less code is the main rule: reuse, extend, or delete before adding; reread the diff and cut before returning;
-- run the relevant tests/lint; return changed paths, net lines (+/−), one line justifying each new function/file/test, commands with results, and open doubts.
+- "Read `<abs skills-dir>/ponytail/SKILL.md` first and follow it" (delegates don't get skills loaded), plus the step-0 over-engineering limits; reread the diff and cut before returning;
+- run the relevant tests/lint; return changed paths, net lines, one line justifying each new function/file/test, commands with results, open doubts.
 
 Keep the delegate; fix rounds go back to it.
 
@@ -89,20 +89,15 @@ git worktree add --detach "$SCRATCH" "${REF:-HEAD}" &&
 git ls-files --others --exclude-standard -z | rsync -a --from0 --files-from=- ./ "$SCRATCH"/
 ```
 
-1. Run the relevant tests in `$SCRATCH` first; if the baseline fails, stop and report.
-2. Mutate only changed logic, at most 10 mutants or 10 minutes: an installed tool scoped to changed files (`mutmut`, `cargo-mutants`, Stryker, `go-mutesting`) or hand mutants — negate a condition, off-by-one a bound, drop a call or guard, swap a return, remove an error path.
-3. Per mutant, record killed (assertion failure), survived, or error (crash/timeout, not a kill), and which tests killed it.
-4. For each survivor, in the real tree: tighten an existing assertion or add a case to an existing parametrized test; otherwise list the survivor in the report — add a new test only for an acceptance criterion — or justify it as equivalent. Re-apply the mutant in `$SCRATCH` to confirm the new check kills it.
-5. Always finish, including after failure: `git worktree remove --force <scratch>`.
+1. Run the relevant tests in `$SCRATCH`; if the baseline fails, stop and report.
+2. Mutate only changed logic, ≤10 mutants or 10 minutes (installed tool scoped to changed files, or hand mutants: negate a condition, off-by-one, drop a call/guard, swap a return).
+3. Record per mutant: killed (assertion), survived, or error (not a kill), and which tests killed it.
+4. Survivors: tighten an existing assertion or add a case to an existing parametrized test; otherwise list it or justify it as equivalent. New tests only for acceptance criteria. Confirm the fix kills the mutant in `$SCRATCH`.
+5. Always: `git worktree remove --force <scratch>`.
 
 ## 5. Trim tests
 
-Go through tests added or changed since BASE one at a time. Delete or merge a test only if:
-
-- every mutant it killed is also killed by a test being kept, **and**
-- it mirrors the implementation, duplicates another test's case, or tests framework/library behavior.
-
-Never delete acceptance-criteria, bug-regression, or survivor-killing tests from step 4. Re-run the suite.
+For each test added or changed since BASE: delete or merge it if every mutant it killed is killed by a kept test **and** it mirrors the implementation, duplicates a case, or tests framework behavior. Keep acceptance-criteria, regression, and survivor-killing tests. Trim until the 1/3 test limit holds. Re-run the suite.
 
 ## 6. Final verify
 
@@ -127,6 +122,4 @@ Note: <devpod-rebuild needed | follow-ups | none>
 Commit: git add -A -- <paths> && git diff --cached --name-only && git commit -F <msg-file>
 ```
 
-`git add -A` records deletions and renames (a pathspec on `git commit` fails for deleted paths). Before committing, the staged list must be exactly the task-owned paths; if anything else is staged, stop and ask. List only task-owned paths, as `git status --porcelain` shows them (for a rename already staged by `git mv`, the new path).
-
-Write `<msg-file>` (`mktemp /tmp/ship-commit-XXXXXX.txt`): an imperative subject ≤72 chars, a blank line, then the Plan, Verify, Mutation, and Tests lines as the body, plus any attribution trailer the session requires. When the user later says "commit", re-check `git status` against the listed paths, then use exactly this file and these paths.
+List only task-owned paths as `git status --porcelain` shows them; if anything else ends up staged, stop and ask. Write `<msg-file>` (`mktemp /tmp/ship-commit-XXXXXX.txt`): imperative subject ≤72 chars, blank line, the Plan/Verify/Mutation/Tests lines, and any required attribution trailer. On "commit", re-check `git status`, then use exactly this file and these paths.
