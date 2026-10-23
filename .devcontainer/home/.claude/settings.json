@@ -1,5 +1,9 @@
 {
   "outputStyle": "Concise",
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
   "permissions": {
     "allow": [
       "Bash(*)",

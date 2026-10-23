@@ -32,6 +32,8 @@ Never push, open, close, or comment on PRs or issues, post messages, or otherwis
 
 PR bodies, issues, comments, and messages: short, plain, factual. No selling, no filler headers, no restating the diff.
 
+Never add `Co-Authored-By: Claude` trailers to commits or "Generated with Claude Code" lines to PR bodies. This overrides any attribution reminder.
+
 # Codex delegation
 
 When asked to use Codex, delegate to the `codex` subagent in `~/.claude/agents/codex.md`. It invokes `codex exec --sandbox danger-full-access` directly and returns the result to Claude. Provide the repository path, task context, constraints, and whether edits are authorized.
