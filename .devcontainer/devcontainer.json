@@ -12,7 +12,8 @@
     "--network=host",
     "--device=nvidia.com/gpu=all",
     "--device=/dev/dri",
-    "--env=NVIDIA_DRIVER_CAPABILITIES=all"
+    "--env=NVIDIA_DRIVER_CAPABILITIES=all",
+    "--shm-size=16g"
   ],
   // forwardPorts is incompatible with --network=host (ports are already reachable on the host).
   // "forwardPorts": [3001, "9000-9100"],
