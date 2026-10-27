@@ -1,6 +1,6 @@
 ---
 name: agent-review
-description: Weekly review of how the user works with Claude Code and Codex — score against the eight levels of AI adoption, mine repeated corrections into proposed rule/skill diffs, flag missed delegation opportunities, and pick one experiment for next week. Report-only; proposals are applied only after explicit approval. Use when the user asks for an agent review, weekly review, lessons, or "what level am I".
+description: Weekly review of how the user works with Claude Code and Codex — score against the eight levels of AI adoption, mine repeated corrections into proposed rule/skill diffs, flag missed delegation opportunities, pick one experiment for next week, and list disk cleanup opportunities. Report-only; proposals are applied only after explicit approval. Use when the user asks for an agent review, weekly review, lessons, or "what level am I".
 effort: medium
 ---
 
@@ -43,6 +43,17 @@ Rule missing → propose adding it. Rule exists but was violated → propose sha
 
 **Last week's experiment** — tried or not, and what the sessions show.
 
+**Disk cleanup** — read-only, sizes only; never delete. Run `df -h /workspace` and `docker system df`, then size the usual growth spots:
+
+```bash
+du -xsh ~/.cache/* ~/.bun/install ~/.npm /tmp 2>/dev/null | sort -rh | head
+du -xh --max-depth=2 /workspace 2>/dev/null | sort -rh | head -20
+find /workspace -maxdepth 4 -type d \( -name tmp -o -name '*backup*' \) -prune -mtime +14 -exec du -sh {} + 2>/dev/null | sort -rh | head
+find /tmp -mindepth 1 -maxdepth 1 -mtime +3 -print0 | du -csh --files0-from=- 2>/dev/null | tail -1
+```
+
+List items ≥5G: path, size, age, and the command that would reclaim it (`docker builder prune -a -f`, `uv cache clean`, `docker image rm <id>`, `rm -rf <path>`). Mark caches (re-downloadable) apart from data (backups, `tmp/` dirs with results) — data needs the user's call.
+
 ## 3. Write the review
 
 Write `<repo>/.agent-reviews/<YYYY>-W<ww>.md` (ISO week):
@@ -54,6 +65,7 @@ Write `<repo>/.agent-reviews/<YYYY>-W<ww>.md` (ISO week):
 - **Did:** <one line: the main things agents worked on>
 - **Biggest opportunity:** <one line>
 - **Level:** <x.y> (<±d> vs last week) · <claude n sessions, codex n sessions, active h>
+- **Disk:** <used>% used · ≈<n>G reclaimable (<top item>)
 
 ## What agents did last week
 
@@ -69,6 +81,13 @@ Write `<repo>/.agent-reviews/<YYYY>-W<ww>.md` (ISO week):
 - **Gain:** <time, turns, or errors saved>
 - **Proposed rule (L1):** `<file>`: <exact line to add/replace> — only when a config/skill change is the fix
 
+## Disk cleanup
+<used>% used, <free> free. Reclaimable ≈ <n>G.
+
+| Path | Size | Age | Kind | Reclaim with |
+|---|---|---|---|---|
+| <path> | <G> | <d> | cache/data | `<command>` |
+
 ## Last week's experiment
 **<name>** — <tried | not tried>: <result>
 
@@ -76,7 +95,7 @@ Write `<repo>/.agent-reviews/<YYYY>-W<ww>.md` (ISO week):
 **<name>** — <why>. Start with: `<command or prompt>`
 ```
 
-Keep it scannable: ≤8 table rows (group small projects as "other"), ≤4 opportunities ranked by payoff, no paragraphs over 2 lines. Opportunities cover both lessons (repeated corrections) and efficiency (manual chains, polling, wrong model tier, chores done by hand).
+Keep it scannable: ≤8 rows per table (group small projects as "other"), ≤4 opportunities ranked by payoff, no paragraphs over 2 lines. Opportunities cover both lessons (repeated corrections) and efficiency (manual chains, polling, wrong model tier, chores done by hand).
 
 Quote at most ~15 words per example; never copy secrets, tokens, or pasted content.
 
