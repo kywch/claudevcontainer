@@ -84,6 +84,9 @@ COPY --from=ghcr.io/prefix-dev/pixi:latest /usr/local/bin/pixi /usr/local/bin/pi
 COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx
 
+# Install Go
+COPY --from=golang:1 /usr/local/go /usr/local/go
+
 # Archon CLI. State at $ARCHON_HOME=/workspace/.archon (set in
 # devcontainer.json). Pinned + checksum-verified. Final `rm -rf
 # /tmp/claude-agent-sdk-*` is load-bearing: `archon version` extracts the
@@ -114,7 +117,7 @@ USER $USERNAME
 ENV HOME=/home/agent
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV BUN_INSTALL=/home/agent/.bun
-ENV PATH=$PATH:/usr/local/share/npm-global/bin:/home/agent/.local/bin:/home/agent/.bun/bin
+ENV PATH=$PATH:/usr/local/share/npm-global/bin:/home/agent/.local/bin:/home/agent/.bun/bin:/usr/local/go/bin:/home/agent/go/bin
 ENV SHELL=/bin/zsh
 ENV EDITOR=nano
 ENV VISUAL=nano
