@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Orchestrate a coding task end to end — implement with a subagent, verify with an independent other-vendor reviewer (with arch-review), loop on findings, harden with mutation testing, trim tests, then stop before commit with a prepared commit message. Use when the user invokes /ship or $ship, or asks to "implement then verify", "use subagent to implement/fix, then independently verify", or "edit, then review". Not for running a project's build command. Flags --plan, --scratch, --verifier=other|codex|claude, --rounds=N, --no-mutation, --branch=NAME, --no-branch. Never commits.
+description: Orchestrate a coding task end to end — implement with a subagent, verify with an independent other-vendor reviewer (with arch-review), loop on findings, trim tests, then stop before commit with a prepared commit message. Mutation-checked test trimming is opt-in (--trim, or the user says "trim tests", also after a ship run). Use when the user invokes /ship or $ship, or asks to "implement then verify", "use subagent to implement/fix, then independently verify", or "edit, then review". Not for running a project's build command. Flags --plan, --scratch, --verifier=other|codex|claude, --rounds=N, --trim, --branch=NAME, --no-branch. Never commits.
 effort: medium
 ---
 
@@ -10,12 +10,12 @@ Orchestrate; do not implement in the main thread. The main agent owns scope, gat
 
 ## Flags
 
-- (default) — implement → verify → fix loop → harden → trim → final verify → report. Stop before commit.
+- (default) — implement → verify → fix loop → trim → final verify → report. Stop before commit. No mutation testing.
 - `--plan` — read-only plan first; wait for an explicit "go". Questions or feedback are not approval.
 - `--scratch` — implied for experiment, debug, parity, and profiling code: implement → one verify of measurement validity → report. Skip arch-review and steps 4–5; no new checks, tests, or harness.
 - `--verifier=other|codex|claude` — default `other`: the vendor that is not running this skill. If it is unavailable, use a fresh same-vendor top-model verifier and flag `same-vendor` in the report.
 - `--rounds=N` — fix→re-verify rounds after the first verification, integer 0–3 (default 2).
-- `--no-mutation` — skip hardening. Implied for docs/config-only diffs, repos without a commit, and changes inside submodules.
+- `--trim` — also run step 5, the mutation-checked trim. Same as the user saying "trim tests" during or after a run. Not for docs/config-only diffs, repos without a commit, or changes inside submodules.
 - `--branch=NAME` — branch to create. Default: `<type>/<slug>` if on the default branch (step 0), else stay.
 - `--no-branch` — stay on the current branch.
 
@@ -78,9 +78,15 @@ The main agent runs any sandbox-blocked commands and appends results. Malformed 
 
 On FAIL, triage: send a finding (id + evidence) to the implementer only if it shows a reachable failure of the acceptance criteria. Fixes needing a new guard, option, test file, or >20 lines, and anything about future or legacy cases, go to the report as follow-ups. Re-verify scoped to those ids, the hunks changed since the last round, and their callers — no new scope. When `--rounds` is exhausted with open blocker/major findings, stop: skip steps 4–5 and report BLOCKED. Minor findings: fix if trivial, else list.
 
-## 4. Harden — mutation testing
+## 4. Trim tests
 
-Mutate before trimming: the kill matrix is the evidence for trimming. Delegate (default tier, ponytail brief) to work in a scratch copy, never the real tree:
+For each test added or changed since BASE: delete or merge it if it mirrors the implementation, restates a mock, echoes a constant, duplicates a case, tests framework behavior, or asserts nothing meaningful. Merge near-duplicates into parametrized cases. Keep acceptance-criteria and regression tests. Trim until the 1/3 test limit holds. Re-run the suite.
+
+## 5. Mutation-checked trim (opt-in)
+
+Only with `--trim` or when the user says "trim tests". Outside a ship run, use the current branch's merge-base with the default branch as BASE, run this step, then step 6 scoped to the test changes, and report the Mutation/Tests lines.
+
+Scope: tests added since BASE plus the test files of modules the branch changed. Delegate (default tier, ponytail brief); edit tests in the real tree, run mutants in a scratch copy:
 
 ```bash
 SCRATCH=$(mktemp -d /tmp/ship-mut-XXXXXX) && echo "$SCRATCH"   # shell state does not persist: note the path
@@ -89,15 +95,13 @@ git worktree add --detach "$SCRATCH" "${REF:-HEAD}" &&
 git ls-files --others --exclude-standard -z | rsync -a --from0 --files-from=- ./ "$SCRATCH"/
 ```
 
-1. Run the relevant tests in `$SCRATCH`; if the baseline fails, stop and report.
-2. Mutate only changed logic, ≤10 mutants or 10 minutes (installed tool scoped to changed files, or hand mutants: negate a condition, off-by-one, drop a call/guard, swap a return).
+1. Run the scoped tests in `$SCRATCH`; if the baseline fails, stop and report. Record test count and runtime.
+2. Mutate only changed logic, 5 minutes total: at least one mutant per changed function or branch as time allows (installed tool scoped to changed files, or hand mutants: negate a condition, off-by-one, drop a call/guard, swap a return).
 3. Record per mutant: killed (assertion), survived, or error (not a kill), and which tests killed it.
-4. Survivors: tighten an existing assertion or add a case to an existing parametrized test; otherwise list it or justify it as equivalent. New tests only for acceptance criteria. Confirm the fix kills the mutant in `$SCRATCH`.
-5. Always: `git worktree remove --force <scratch>`.
-
-## 5. Trim tests
-
-For each test added or changed since BASE: delete or merge it if every mutant it killed is killed by a kept test **and** it mirrors the implementation, duplicates a case, or tests framework behavior. Keep acceptance-criteria, regression, and survivor-killing tests. Trim until the 1/3 test limit holds. Re-run the suite.
+4. Keep a test only if it kills a mutant no other test kills, covers an acceptance criterion, or is a regression test for a named incident. Delete the rest. Merge near-duplicates into table-driven cases; split overlong tests into focused units without adding lines.
+5. Copy the trimmed tests into `$SCRATCH` and re-run the same mutants: the kill set must not shrink. For any lost kill, restore the smallest test that covers it.
+6. Baseline survivors: tighten an existing assertion or add a case to an existing parametrized test; otherwise list it or justify it as equivalent. New tests only for acceptance criteria.
+7. Always: `git worktree remove --force <scratch>`.
 
 ## 6. Final verify
 
@@ -115,8 +119,8 @@ Plan: <n>/<m> done
   ✗ <item> — dropped/blocked: <why>
 Diff: <files> files, +<a>/-<d>, net <±n>; surplus removed: <lines>; code vs tests: +<c>/+<t>
 Verify: <vendor[, same-vendor]> <PASS|FAIL>, <r> round(s); open: <ids or none>
-Mutation: <killed>/<total> killed, <e> errors; survivors: <id — fixed | equivalent: why> | skipped: <why>
-Tests: +<added> −<trimmed> (<reason per trim group>)
+Mutation: <killed>/<total> killed (same before/after trim), <e> errors; survivors: <id — fixed | equivalent: why> | not run
+Tests: +<added> −<trimmed> (<reason per trim group>); count <before>→<after>, runtime <before>→<after>
 Checks: <commands> → <pass|fail|not run: why>
 Note: <devpod-rebuild needed | follow-ups | none>
 Commit: git add -A -- <paths> && git diff --cached --name-only && git commit -F <msg-file>
