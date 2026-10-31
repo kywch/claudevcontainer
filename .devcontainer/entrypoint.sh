@@ -82,6 +82,18 @@ mkdir -p "$ARCHON_ROOT/workflows" "$AGENT_HOME/.archon-worktrees"
 rm -rf "$ARCHON_ROOT/.archon"
 ln -sfn "$AGENT_HOME/.archon-worktrees" "$ARCHON_ROOT/workspaces"
 
+# 1d. Host X11: python-xlib only tries filesystem sockets, so link the host's
+#     (bound read-only at /tmp/.X11-unix-host) into the container's own dir,
+#     where in-container Xvfb still creates its sockets. python-xlib also
+#     requires an Xauthority file; the host authorizes by local uid, so empty.
+if [ -d /tmp/.X11-unix-host ]; then
+  sudo install -d -m 1777 /tmp/.X11-unix
+  for s in /tmp/.X11-unix-host/X*; do
+    [ -S "$s" ] && ln -sfn "$s" "/tmp/.X11-unix/${s##*/}"
+  done
+  touch "$AGENT_HOME/.Xauthority"
+fi
+
 # 2. Seed config from image defaults.
 #    Top-level files: overwrite every boot so repo edits propagate.
 #    Managed subdirs: mirror with --delete (stale entries removed).
