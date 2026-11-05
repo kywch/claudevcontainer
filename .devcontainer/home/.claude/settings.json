@@ -11,8 +11,8 @@
       "Edit",
       "Write",
       "WebFetch(*)",
-      "Glob(*)",
-      "Grep(*)",
+      "Glob",
+      "Grep",
       "Agent(*)"
     ]
   },
