@@ -173,7 +173,12 @@ def scan_git(
 ) -> None:
     try:
         raw = run(
-            ["find", workspace, "-xdev", "-name", ".git", "-print0"],
+            ["find", workspace, "-xdev", "(", "-name", ".venv", "-o", "-name", "node_modules", "-o", "-name", ".pixi",
+             # Root-owned dirs unreadable from the host user; they hold no worktrees.
+             "-o", "-path", "*/research-hermes/internal", "-o", "-name", ".tmp-symlink-test.*",
+             "-o", "-path", "*/tmp/pr36/*/verifier", "-o", "-path", "*/hobby/harbor/jobs",
+             "-o", "-path", "*/mem-benchmarks/tmp/pgvector-data", ")",
+             "-prune", "-o", "-name", ".git", "-print0", "-prune"],
             args.command_timeout,
             args.max_output_bytes,
         ).stdout
@@ -445,7 +450,9 @@ def public_docker_labels(labels: Any) -> dict[str, str]:
 
 
 def docker_created(value: str) -> dt.datetime:
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    # Docker emits 1-9 fractional digits; Python < 3.11 fromisoformat needs exactly 3 or 6.
+    value = re.sub(r"\.(\d+)", lambda m: "." + m[1][:6].ljust(6, "0"), value.replace("Z", "+00:00"))
+    return dt.datetime.fromisoformat(value)
 
 
 def docker_image_remove_argv(ident: str, tags: list[str]) -> list[str]:
@@ -484,6 +491,76 @@ def docker_df(
             pass
     summary["rows"] = rows
     return summary, volume_sizes, image_unique_sizes
+
+
+DEV_CONTAINER_LABEL = "dev.containers.id"
+DEV_CONTAINER_SH = r"""
+big=104857600
+for p in "$HOME"/.cache/* "$HOME"/.bun/install/* /tmp/* /tmp/claude-*/*; do
+  case $p in
+    *'
+'*) continue ;;
+    /tmp/claude-*/*) ;;
+    /tmp/claude-*) continue ;;
+  esac
+  line=$(du -sxB1 "$p" 2>/dev/null | awk -v m=$big '$1>=m')
+  [ -n "$line" ] || continue
+  case $p in
+    /tmp/*) if recent=$(find "$p" -xdev -mmin -1440 -print -quit 2>/dev/null) && [ -z "$recent" ]; then
+              printf 'tmp\t%s\n' "$line"
+            fi ;;
+    *) printf 'cache\t%s\n' "$line" ;;
+  esac
+done
+exit 0
+"""
+MANUAL_COMMANDS = [
+    "uv cache prune",
+    "pixi clean cache",
+    "bun pm cache rm",
+    "hf cache delete",
+    "rm -rf <stale /tmp path>",
+]
+
+
+def scan_dev_container(
+    report: dict[str, Any], args: argparse.Namespace, containers: list[dict[str, Any]], daemon_id: str
+) -> None:
+    for item in containers:
+        if item.get("State", {}).get("Status") != "running" or DEV_CONTAINER_LABEL not in (
+            item.get("Config", {}).get("Labels") or {}
+        ):
+            continue
+        ident = str(item["Id"])
+        try:
+            out = text(
+                ["docker", "exec", ident, "sh", "-c", DEV_CONTAINER_SH],
+                args.command_timeout,
+                args.max_output_bytes,
+            )
+            rows = [
+                (group, int(size), path)
+                for group, size, path in (
+                    line.split("\t", 2) for line in out.splitlines()[: args.max_items]
+                )
+            ]
+        except (ScanError, ValueError) as exc:
+            add_error(report, "dev_container", str(exc), fatal=False)
+            continue
+        for group, size, path in rows:
+            kind = f"dev_container_{group}"
+            report["resources"].append(
+                {
+                    "id": f"{kind}:{ident}:{path}",
+                    "kind": kind,
+                    "class": "review",
+                    "reason_keys": ["manual_cleanup_only"],
+                    "locator": {"container": ident, "path": path},
+                    "fingerprint": {"container": ident, "daemon_id": daemon_id},
+                    "estimated_bytes": size,
+                    "suggested_commands": MANUAL_COMMANDS,
+                }
+            )
 
 
 def scan_docker(report: dict[str, Any], args: argparse.Namespace) -> None:
@@ -595,6 +672,8 @@ def scan_docker(report: dict[str, Any], args: argparse.Namespace) -> None:
                 }
             )
 
+        scan_dev_container(report, args, containers, daemon_id)
+
         for item in images:
             ident = str(item.get("Id", ""))
             labels = item.get("Config", {}).get("Labels") or {}
@@ -607,7 +686,7 @@ def scan_docker(report: dict[str, Any], args: argparse.Namespace) -> None:
             reasons: list[str] = []
             if referenced:
                 reasons.append("container_reference")
-            if age_days < args.image_min_age_days:
+            if not dangling and age_days < args.image_min_age_days:
                 reasons.append("too_recent")
             eligible = not reasons
             unique_size = image_unique_sizes.get(ident.removeprefix("sha256:")[:12], 0)
@@ -734,7 +813,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-min-age-days", type=int, default=14)
     parser.add_argument("--worktree-min-age-days", type=int, default=14)
     parser.add_argument("--report-hours", type=int, default=24)
-    parser.add_argument("--command-timeout", type=float, default=30)
+    parser.add_argument("--command-timeout", type=float, default=120)
     parser.add_argument("--docker-df-timeout", type=float, default=90)
     parser.add_argument("--max-output-bytes", type=int, default=8_000_000)
     parser.add_argument("--max-items", type=int, default=20_000)

@@ -243,7 +243,7 @@ def validate_unused_image(
     if any(container.get("Image") == ident for container in containers):
         raise ValidationError("image gained container reference")
     created = docker_created(str(item["Created"]))
-    if (utc_now() - created).days < int(report["limits"]["image_min_age_days"]):
+    if tags and (utc_now() - created).days < int(report["limits"]["image_min_age_days"]):
         raise ValidationError("image no longer meets age policy")
     if fingerprint.get("daemon_id") != report["docker"]["daemon_id"]:
         raise ValidationError("resource daemon identity mismatch")

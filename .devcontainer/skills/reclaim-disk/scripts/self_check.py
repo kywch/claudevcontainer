@@ -52,6 +52,7 @@ def main() -> None:
     assert not is_anonymous_volume(anonymous_name, {})
     assert not is_anonymous_volume("A" * 64, {DOCKER_ANONYMOUS: ""})
     assert SUPPORTED_KINDS == {"docker_image", "docker_volume", "git_worktree"}
+    assert not {"dev_container_cache", "dev_container_tmp"} & SUPPORTED_KINDS
     validate_selection([{"class": "eligible", "kind": "docker_image"}])
     validate_selection([{"class": "eligible", "kind": "docker_volume"}])
     validate_selection([{"class": "eligible", "kind": "git_worktree"}])

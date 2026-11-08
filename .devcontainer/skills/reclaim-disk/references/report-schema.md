@@ -22,6 +22,8 @@ Each resource contains:
 - ownership, activity, reference, and preservation evidence
 - exact `proposed_argv` only for eligible secondary worktrees, Docker images, or anonymous local Docker volumes
 
+`dev_container_cache` and `dev_container_tmp` resources are always `review`: `locator` holds container ID and path, `estimated_bytes` is `du` allocated size, and `suggested_commands` lists plain-text manual commands. Their scan failures are non-fatal errors and never make the report incomplete.
+
 Only `git_worktree`, `docker_image`, and `docker_volume` resources may be `eligible`. Worktree evidence includes exact path/device/inode, common Git directory, HEAD, branch, status hashes, process visibility/activity, age, plus dirty/detached/preservation warnings. Image evidence includes exact immutable ID, complete tag list, RootFS, creation time, reference state, and daemon ID. Volume evidence includes `anonymous`, `local`, reference state, exact name, Docker anonymous-label presence, creation time, driver, mountpoint, and daemon ID. Containers, named volumes, and build cache are always `protected` and omit `proposed_argv`.
 
 Estimates use allocated worktree bytes when available and Docker-reported bytes otherwise. Eligible image estimates use Docker's per-image unique-size figure as a conservative lower bound. Shared layers reclaimable only after several images are removed can make actual recovery larger; image, build-cache, and cross-category totals remain non-additive.

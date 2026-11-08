@@ -1,6 +1,6 @@
 ---
 name: reclaim-disk
-description: Scan /workspace and Docker disk usage, then remove only explicitly approved 14+-day secondary Git worktrees, unreferenced 14+-day Docker images, or unreferenced Docker-marked anonymous local volumes. Use for workspace or Docker cleanup audits; never for primary worktree, container, named-volume, or build-cache deletion.
+description: Scan /workspace and Docker disk usage, then remove only explicitly approved 14+-day secondary Git worktrees, unreferenced Docker images (tagged ones 14+ days old), or unreferenced Docker-marked anonymous local volumes. Use for workspace or Docker cleanup audits; never for primary worktree, container, named-volume, or build-cache deletion.
 ---
 
 # Reclaim Disk
@@ -17,7 +17,7 @@ python3 <skill-dir>/scripts/scan_reclaim.py \
   --output /tmp/reclaim-disk-report.json
 ```
 
-Scanning is read-only. Summarize `eligible`, `review`, and `protected` totals separately. State that Docker image and cache estimates can overlap through shared layers.
+Scanning is read-only. Summarize `eligible`, `review`, and `protected` totals separately. State that Docker image and cache estimates can overlap through shared layers. Also summarize the `dev_container_cache` and `dev_container_tmp` review items (large `~/.cache/*`, `~/.bun/install/*`, and 24h-stale `/tmp` entries in the running dev container) and offer these manual commands as plain text, never run by this skill: `uv cache prune`, `pixi clean cache`, `bun pm cache rm`, `hf cache delete`, `rm -rf <stale /tmp path>`.
 
 Read [references/safety-policy.md](references/safety-policy.md) before proposing deletion. Read [references/report-schema.md](references/report-schema.md) when interpreting JSON or debugging validation.
 
@@ -37,14 +37,14 @@ python3 <skill-dir>/scripts/apply_reclaim.py \
   --result /tmp/reclaim-disk-result.json
 ```
 
-Applier accepts only eligible secondary worktrees, old unreferenced Docker images, and anonymous Docker volumes. It revalidates exact path/device/inode and Git state for worktrees; exact image ID or 64-hex volume name, age, references, fingerprint, daemon/context, report hash, plus anonymous label and local driver for volumes. Drift causes a skip. It runs only report-recorded exact commands.
+Applier accepts only eligible secondary worktrees, old unreferenced Docker images, and anonymous Docker volumes. It revalidates exact path/device/inode and Git state for worktrees; exact image ID or 64-hex volume name, age (tagged images and volumes only), still-dangling state, references, fingerprint, daemon/context, report hash, plus anonymous label and local driver for volumes. Drift causes a skip. It runs only report-recorded exact commands.
 
 After application, report target outcomes plus measured filesystem free-space delta. Re-scan when requested or when report expired.
 
 ## Boundaries
 
 - Docker daemon is global. Only local volumes whose exact 64-lowercase-hex name and `com.docker.volume.anonymous` label both prove anonymous creation can become eligible.
-- Docker images become eligible only when at least 14 days old and unreferenced by every container. Tagged and dangling images use same rule.
+- Tagged Docker images become eligible only when at least 14 days old and unreferenced by every container. Dangling (untagged) images unreferenced by every container are eligible at any age.
 - Secondary Git worktrees become eligible at 14 days based on HEAD commit age. Dirty, detached, and unpreserved-commit states are explicit warnings, not blockers.
 - Primary, locked, active, outside-workspace, missing, or incompletely inspected worktrees are never eligible.
 - Docker containers, named volumes, build cache, referenced images, referenced volumes, and current dev-container resources are never eligible.

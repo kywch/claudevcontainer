@@ -26,10 +26,12 @@ Image eligibility requires every condition:
 
 - Exact immutable `sha256:` image ID is report-bound.
 - Every container was enumerated successfully and none references image ID.
-- Image meets configured image minimum age: 14 days by default.
+- Tagged image meets configured image minimum age: 14 days by default. Dangling (no tags) images skip the age check.
 - Exact ID, creation time, RootFS, complete tag list, daemon ID, and context are unchanged at apply time.
 
-Tagged and dangling images use same rule. Removing tagged images loses local snapshots and may require later pulls or rebuilds. Containers, named volumes, and build cache remain scan/report-only and never eligible.
+Apply time rechecks dangling state through the unchanged empty tag list. Removing tagged images loses local snapshots and may require later pulls or rebuilds. Containers, named volumes, and build cache remain scan/report-only and never eligible.
+
+Dev-container cache inspection: for each running container carrying the `dev.containers.id` label, the scanner makes one bounded `docker exec` (never a temporary container) listing `~/.cache/*`, `~/.bun/install/*`, and `/tmp` or `/tmp/claude-*/*` entries of at least 100 MB with no file modified in 24 hours. Results are `review` only, carry suggested manual commands as text, and are never applier targets. Failures add a non-fatal error.
 
 Anonymous-volume eligibility requires every condition:
 
