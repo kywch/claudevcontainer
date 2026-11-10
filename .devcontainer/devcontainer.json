@@ -10,6 +10,9 @@
   "runArgs": [
     "--init",
     "--network=host",
+    // Codex sandbox (bwrap) needs user namespaces, which default seccomp/AppArmor block.
+    "--security-opt=seccomp=unconfined",
+    "--security-opt=apparmor=unconfined",
     "--device=nvidia.com/gpu=all",
     "--device=/dev/dri",
     "--env=NVIDIA_DRIVER_CAPABILITIES=all",

@@ -67,6 +67,7 @@ services:
     container_name: workstation
     command: ["sleep", "infinity"]
     init: true
+    security_opt: [seccomp=unconfined, apparmor=unconfined]  # Codex sandbox (bwrap) needs user namespaces
     volumes:
       - ./:/workspace
       - claude-home:/home/agent/.claude

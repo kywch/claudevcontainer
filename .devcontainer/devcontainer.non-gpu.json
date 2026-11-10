@@ -9,7 +9,10 @@
   },
   "runArgs": [
     "--init",
-    "--network=host"
+    "--network=host",
+    // Codex sandbox (bwrap) needs user namespaces, which default seccomp/AppArmor block.
+    "--security-opt=seccomp=unconfined",
+    "--security-opt=apparmor=unconfined"
     // GPU passthrough lives in devcontainer.json (the default profile).
   ],
   // forwardPorts is incompatible with --network=host (ports are already reachable on the host).
