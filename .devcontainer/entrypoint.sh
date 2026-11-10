@@ -50,6 +50,12 @@ done
 relocate_symlink "$AGENT_HOME/.gemini/tmp" "$AGENT_STATE/gemini/tmp"
 relocate_symlink "$AGENT_HOME/.cursor/projects" "$AGENT_STATE/cursor/projects"
 
+# uv/pixi hardlink cache -> env only within one mount; envs live in /workspace.
+mkdir -p "$AGENT_HOME/.cache"
+for c in uv rattler; do
+  relocate_symlink "$AGENT_HOME/.cache/$c" "/workspace/.cache/$c"
+done
+
 # Codex session transcripts are safe to copy, but not safe to relocate with
 # symlinks. Mirror them into the workspace so rebuilds/recreates do not strand
 # existing JSONL rollouts in the codex-home volume.
