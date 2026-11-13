@@ -7,6 +7,12 @@ description: Check rlwrld-mwaa deployment readiness before merge, then monitor S
 
 Repo `rlwrld-mwaa`. `P="--name rlwrld-mwaa --region us-east-1 --profile rlwrld-sso"`.
 
+For bundle stage acceptance, same-release recovery and individual cadence restoration,
+follow the [pipeline operations runbook](https://github.com/RLWRLD/exp-bundle-pipeline/blob/main/docs/operations-runbook.md).
+Record decisions and proofs using its [operations evidence format](https://github.com/RLWRLD/exp-bundle-pipeline/blob/main/docs/logs/README.md).
+This skill owns MWAA deployment and fingerprint gates; successful deployment alone
+does not prove READY, source ACK or Facts publication.
+
 ## Before merge or manual deployment
 
 Matching pushes to `main` auto-deploy. Worker image releases (`:latest` for Batch stages) are separate: follow exp-bundle-pipeline `skills/release-worker`. For changes to DAGs, shared runtime code or scanner fingerprints, complete this check before declaring the PR ready to merge:
